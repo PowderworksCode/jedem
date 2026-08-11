@@ -28,6 +28,18 @@ Read them in that order. The design docs mark their confidence inline —
 **[verified]** for claims run or read directly, **[speculation]** for unproven
 reasoning.
 
+## Scope: the simple things first
+
+**v1 is a function that takes and returns plain values.** Free functions and
+methods; records, enums, unions and scalars as parameters and returns; sync by
+default with an async opt-out; fallible or infallible. Two targets: node/TS and
+python.
+
+If it needs a callback, a handle to a stateful object, or a stream, it is not v1.
+All three are designed — see below — but none gates the first release. DDL, ORM
+models, format codecs, the Arrow data plane and MCP generation are out
+permanently.
+
 ## The three hard problems
 
 Exposing a function stops being simple at exactly three places, and fluessig's

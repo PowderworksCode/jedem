@@ -89,7 +89,7 @@ coupling survivable (§8):
 **JSON Schema is the interchange format, not the execution format.** The core
 compiles it to a constraint IR shaped for streaming evaluation (§4). The host
 adapters (Pydantic → JSON Schema, Zod → JSON Schema) are **hand-written per
-language and sit above calquer's generated surface** — they are host-language
+language and sit above calquer's generated surface** [confirmed by the owner] — they are host-language
 code that produces a string, not something calquer generates. This is what keeps
 "bindings stay thin" true: the generated binding is thin; the adapter is a
 separate, small, idiomatic library per ecosystem.
@@ -395,7 +395,7 @@ Two tracks. The core track is unblocked; the surface track is gated on calquer.
 | **S1** | steps 1–2 (free fns → python, node) | `complete_json` in Python + TS — closes the README promise open since May 2023 |
 | **S2** | step 3 (**handle mint**) | `Stream` with `push`/`snapshot`/`status` — the first genuinely useful surface |
 | **S3** | steps 4–5 (**streams**, **value-returning callbacks**) | `changes()` + native validators |
-| **S4** | step 6 (**.NET backend**) | .NET, then the Pydantic/Zod/Valibot adapters |
+| **S4** | step 6 (**.NET backend**) | .NET — technology unprescribed, whichever Rust→C# bindgen works — then the Pydantic/Zod/Valibot adapters |
 
 ### The cost of "full calquer consumer from day one", stated plainly
 
@@ -447,5 +447,13 @@ is available if the schedule bites.
 6. **The name.** Positioning moves from "JSON repair" to "incremental parser and
    validator." `complete_json` stays as one entry point among several, and the
    README's framing needs to lead with the new claim.
-7. **Org.** jawohl is in `genauai`, not `PowderworksCode` [verified]. Adoption is
-   a transfer or a fork; noted, not acted on.
+7. **Org — resolved.** jawohl is in `genauai`, not `PowderworksCode`
+   [verified]. The owner is doing a **transfer**, not a fork, and is handling it
+   directly. Nothing in this design touches `genauai/jawohl`.
+8. **Only `complete_json` fits calquer's v1 boundary.** calquer v1 is functions
+   over plain values — no callbacks, handles, or streams (calquer design §1). Of
+   jawohl's surface only Level 1 qualifies; `Stream` is a handle mint, `changes()`
+   is a stream, native validators are callbacks. With jawohl a full calquer
+   consumer from day one, §8's surface track is therefore gated end to end on
+   calquer steps 3–5. The core track (C1–C4) is unaffected and remains the right
+   place to spend the wait.

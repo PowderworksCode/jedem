@@ -62,11 +62,36 @@ consumers are **pidgin** (~157 symbols, node + python + php, ruby soon) and
 | Tier | Targets | Why |
 |---|---|---|
 | 1 | **node/TS, python** | Both consumers need both. Everything ships here first. |
-| 2 | **.NET** | jawohl target #4. **Does not exist in fluessig** [verified] — a genuinely new backend. |
+| 2 | **.NET** | jawohl target #4. **Does not exist in fluessig** [verified] — a genuinely new backend. Technology is not prescribed: whichever Rust→C# bindgen actually works (`csbindgen`, `interoptopus`, or a hand-rolled C ABI + P/Invoke), chosen on contact rather than up front. |
 | 3 | php, ruby | pidgin needs them; fluessig has both. |
 | 4 | wasm, cpp, java | fluessig has them; no consumer is asking. Carried, not driven. |
 
 **Explicitly not in scope:** anything about *data*. See §4.
+
+### The v1 boundary — "the simple things"
+
+Starting over is only worth it if the first version is genuinely small, so the
+line is drawn explicitly rather than left to drift:
+
+> **v1 is a function that takes and returns plain values.** Free functions and
+> methods; records, enums, unions and semantic scalars as parameters and returns;
+> synchronous by default with an async opt-out; fallible or infallible. Two
+> targets: node/TS and python.
+
+If it needs a **callback**, a **handle mint**, or a **stream**, it is not v1. All
+three are designed in §2 — the notes already paid for that knowledge and throwing
+it away would be the expensive mistake — but none of them gates the first release.
+§7 sequences them one at a time, each against a real consumer.
+
+MCP generation, the effects flags, and every data-shaped concern are gone
+entirely (§4). What remains is one job done well.
+
+**The tension this creates, stated up front:** jawohl 2.0 is a full calquer
+consumer from day one, and *nothing useful in jawohl fits inside the v1 boundary*
+— `Stream` is a handle mint, `changes()` is a stream, native validators are
+callbacks. Only `complete_json` is v1-shaped. So either jawohl waits for §7 steps
+3–5, or the day-one-consumer decision gets revisited. §7 assumes it waits; the
+jawohl design's §8 costs that out.
 
 ---
 
@@ -232,7 +257,12 @@ checks. calquer separates:
 
 - **kind** — what the op *is*: `Ctor | Method | Factory | Stream | Subscription | Manual`
 - **projection** — how it *crosses*: async opt-out, result-envelope, name pins
-- **effects** — what it *means*: `readonly` / `destructive` / `worker` (MCP hints)
+
+There is **no third category.** fluessig has one — `readonly` / `destructive` /
+`worker` — but those flags are consumed by exactly one thing: `src/bindgen/mcp.rs`.
+Zero references in any other backend [verified]. With MCP dropped (§4) the whole
+semantic-metadata axis goes with it, and an op is described entirely by what it
+is and how it crosses.
 
 Illegal combinations become unrepresentable or checked in one place, rather than
 discovered flag-pair by flag-pair.
@@ -270,6 +300,7 @@ All four are **never**, per the owner's decision. Stating them precisely, becaus
 | **DDL** (`CREATE TABLE`, 3 dialects) | **never** | Deleted. `src/sql.rs`. |
 | **ORM models** (SQLAlchemy, Django, TS tables, Drizzle) | **never** | Deleted. `src/codegen.rs`. |
 | **Format codecs** (Mongo, JSONL, Parquet, Mermaid) | **never** | Deleted — and mostly never built past design. |
+| **MCP surface generation** | **never** | Deleted. `src/bindgen/mcp.rs` (518 ln) turned an op surface into an MCP tool manifest. Real, but it is a *second product* wearing calquer's clothes, and starting over means starting simple. It takes the `readonly`/`destructive`/`worker` flags with it (§3) — nothing else consumed them [verified]. |
 | **Arrow data plane** | **never** *as a data plane* | `src/data.rs` deleted. **But** `ArrowBatch` survives as an ordinary opaque type that crosses the FFI as bytes / `byte[]`, because it is just a type in someone's signature. That is not a data plane; it is calquer doing its one job on a type that happens to be Arrow. |
 
 Dropped with them: the **entity graph** itself (`src/ir.rs`, `src/catalog.rs`),
@@ -313,7 +344,6 @@ call sites [verified]. There is no other coupling to sever.
 | java | 1,416 | ✅ | ⛔ | poll cursor |
 | wasm | 835 | ✅ | ⛔ | — |
 | php | 568 | ✅ *sync-only* | ⛔ | — |
-| mcp | 518 | — | — | — |
 | rust_core | 546 | — | — | — |
 
 Two things this table makes obvious: **handle-minting exists on node and python
@@ -351,9 +381,9 @@ entl/disponent catalog fixtures, and the entity-graph portions of `tests/`
 (`entl_catalog`, `union_catalog`, `cpp_catalog`, `java_catalog`, `php_catalog`
 ≈ 1,600 ln).
 
-**Rough accounting** [verified line counts, my allocation]: ~14,000 lines carry
-over as the core asset, ~6,800 are abandoned outright, and the rest is tests and
-demos that follow whichever half they served.
+**Rough accounting** [verified line counts, my allocation]: ~13,200 lines carry
+over as the core asset, ~7,300 are abandoned outright (including MCP's 518), and
+the rest is tests and demos that follow whichever half they served.
 
 ---
 
@@ -497,19 +527,36 @@ project. If it trends up, calquer is drifting toward transliteration.
 
 ---
 
-## 9. Open questions for the owner
+## 9. Decisions and open questions
 
-1. **Repo and name.** New repo, or `fluessig` renamed in place with the schema
-   half deleted? §6 assumes new. This also decides whether pidgin's existing
-   `#[fluessig(...)]` attributes get a rename pass.
-2. **.NET binding technology.** No prior art in fluessig. `csbindgen`, a
-   hand-rolled C ABI + P/Invoke, or NativeAOT? Affects §7 step 6 materially and
-   I have not researched it.
-3. **jawohl's schema adapters.** The jawohl doc puts Pydantic/Zod → JSON Schema
-   lowering in the *bindings*. That is host-language code calquer does not
-   generate. Confirm those adapters are hand-written per language and sit
-   *above* calquer's generated surface — I have assumed so, and it keeps
-   bindings thin as the doc requires.
-4. **MCP.** `src/bindgen/mcp.rs` (518 ln) generates an MCP surface from ops, and
-   `readonly`/`destructive`/`worker` exist to feed its hints. Keep, or drop as
-   scope creep? It is function-exposure-shaped, so §4 does not obviously kill it.
+### Resolved
+
+1. **Repo and name — `PowderworksCode/calquer`, a new repo.** Not a fluessig
+   rename. Consequence: pidgin's existing `#[fluessig(...)]` attributes need a
+   rename pass to `#[calquer(...)]` when it migrates, and `<Iface>Core` /
+   `cargo fluessig emit` / `fluessig-gen` all get renamed spellings.
+2. **.NET binding technology — not prescribed.** Whichever Rust→C# bindgen
+   actually works, chosen on contact (§1). This is deliberately a §7-step-6
+   decision, not a design-time one; no research is owed before then.
+3. **jawohl's schema adapters — hand-written per language.** Pydantic → JSON
+   Schema, Zod → JSON Schema and friends are ordinary host-language libraries
+   sitting *above* calquer's generated surface. calquer does not generate them,
+   and they are what keeps "bindings stay thin" true.
+4. **MCP — dropped, permanently** (§4), taking `readonly`/`destructive`/`worker`
+   with it (§3).
+
+### Open
+
+5. **Does jawohl wait, or get a temporary hand-written binding?** The v1 boundary
+   (§1) and jawohl's day-one-consumer status are in tension: only `complete_json`
+   is v1-shaped. Either jawohl's useful surface waits for steps 3–5, or a
+   throwaway binding bridges the gap. Currently assumed: it waits.
+6. **What replaces the entl/disponent parity gates?** They were the standing
+   proof that a change did not silently alter output, and they leave with the
+   entity graph (§4). pidgin and jawohl should inherit that role, but neither has
+   a committed golden yet, and a generator without a parity gate regresses
+   quietly.
+7. **Does `Foreign` survive v1?** It exists for genuinely external host types
+   (`http.Server`, a `ChildProcess`) and lowers to an opaque handle. Neither
+   consumer's v1 surface obviously needs one, and §1's boundary argues for cutting
+   it until something does.
