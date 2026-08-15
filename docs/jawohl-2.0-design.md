@@ -274,6 +274,11 @@ correct handlers):
 3. `ValidationFailed` for a path never precedes that path's `ValueStarted`.
 4. `DocumentCompleted` is last, and is emitted exactly once.
 
+**Events cross the FFI typed.** The event enum is a structured discriminated
+union in every language — jedem's only union projection (jedem design §3); there
+is no JSON-envelope mode to fall back to. A consumer never parses a string to
+learn what happened.
+
 **Errors are events, not exceptions.** `ValidationFailed` is a domain outcome —
 the consumer is *supposed* to keep receiving events and decide whether to cancel.
 This maps onto jedem's per-op stream error model, with jawohl setting it to
@@ -363,7 +368,8 @@ s.lowering_report();           // §6.2
 Raw JSON Schema is always supported and is the substrate; `jawohl.Stream(MyPydanticModel)`
 and `jawohl.stream(MyZodSchema)` are host-side sugar over it.
 
-**In jedem terms** [verified against jedem's IR]: `Stream::new` and
+**In jedem terms** [mapped against the jedem design — jedem has no code yet]:
+`Stream::new` and
 `from_json_schema` are **factory ops minting a handle**; `push`/`snapshot`/`status`
 are synchronous **methods** on it; `changes()` is a **stream op**; a native
 validator is a **value-returning callback param**. jawohl exercises all three of

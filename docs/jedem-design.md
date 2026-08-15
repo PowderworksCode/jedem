@@ -109,8 +109,9 @@ sees **one uniform shape regardless of the source language**. Each backend's
 learns whether the closure came from JS, Python, or Ruby. That contract is the
 single most valuable thing in the notes and jedem adopts it verbatim, along
 with the per-backend non-blocking table (node `ThreadsafeFunction` NonBlocking,
-python `with_gil`, ruby GVL trampoline, .NET a pinned delegate + `GCHandle`,
-wasm keep-`Closure`-alive, php `Zval`).
+python `with_gil`, ruby GVL trampoline, wasm keep-`Closure`-alive, php `Zval`;
+the .NET entry — a pinned delegate + `GCHandle` — is my extrapolation, since
+fluessig has no .NET precedent [speculation]).
 
 **Changed — and this is forced by jawohl.** fluessig's callbacks are
 **forward-only, synchronous, void-returning**, and `load_api` *hard-rejects*
@@ -230,8 +231,16 @@ built is exactly the right knob, and jawohl sets it the other way.
 
 jawohl's event enum (`ValueStarted | ValueProgressed | ValueCompleted |
 ValidationFailed | …`) lands as a structured discriminated union — napi
-`Either{N}` over per-variant tagged structs — which is already the default, with
-the JSON envelope as the explicit opt-out. [verified: `tests/union_structured.rs`]
+`Either{N}` over per-variant tagged structs. In fluessig that is the default
+*with a JSON-envelope opt-out* (`{"kind": tag, "payload": body}` as a string)
+[verified: `tests/union_structured.rs`]. **jedem deletes the envelope.** It is a
+`Json` carrier by another name (§3), and a projection mode is the most expensive
+kind of surface to keep — every backend must implement both forever. Structured
+is the only union projection; a backend that cannot lower it yet emits a
+skip-note, per fail-loud. Consequence, stated honestly: fluessig's java backend
+crosses unions *as* envelope strings today, so java unions start as a skip-note
+in jedem until structured lowering is built there — absent rather than degraded,
+which is the §8 rule.
 
 ---
 
@@ -292,6 +301,29 @@ is and how it crosses.
 
 Illegal combinations become unrepresentable or checked in one place, rather than
 discovered flag-pair by flag-pair.
+
+**No `Json` carrier, by construction.** fluessig degrades in two places when it
+cannot type something: an unrecognised scalar maps to `String` at the shared type
+chokepoint (`ty()`, `src/bindgen/mod.rs:433` — the note's own words: "the typed
+methods on that object vanish"), and a cross-package type resolved without
+`--context` degrades to a bare `Json` scalar [from notes:
+`class-handle-return.md`]. Both exist because fluessig's front end could name
+types it could not see. jedem's front end is rustc: every type in an exported
+signature is a real Rust type the compiler already resolved, so "unrecognised"
+is not a state that can occur. The rule, then, has three teeth:
+
+1. There is **no `Json` type in the vocabulary** — nothing to degrade *to*. A
+   type jedem cannot lower is a **spanned compile error** at the derive, never a
+   stringly carrier.
+2. The **union envelope projection is deleted** (§2.3) — structured lowering or
+   a skip-note, nothing in between.
+3. The only opaque crossing is **`Foreign`**, which is *declared* by the author
+   for genuinely external host types — an explicit decision at the declaration
+   site, never a fallback the generator reaches for. (Whether `Foreign` survives
+   v1 at all is §9's open question 7.)
+
+A value crossing the FFI is typed, or the binding does not exist. There is no
+third state.
 
 **Inherited deliberately, not re-decided** — these are notes decisions I
 considered changing and kept, because the notes' reasoning survives:
@@ -377,6 +409,13 @@ only** — five backends emit honest skip-notes — and **.NET is absent entirel
 [verified]. Those are jedem's two real engineering fronts, and jawohl needs
 both (`Stream` handle × Python/TS/.NET).
 
+"Largely intact" has one systematic exception: the §3 `Json`-carrier ban deletes
+code from every backend in the port — the envelope union projection, the
+unrecognised-scalar → `String` fallback, and the bare-`Json` cross-package
+degrade all go, and java's union crossing (envelope strings) becomes a skip-note
+until structured lowering is built there. What carries over is the typed
+lowering; the degrade paths do not.
+
 **The op-layer IR: 785 lines**, as *prior art*. Under a restart it is re-derived
 (§3), but the type vocabulary — `Scalar`, `Model`, `Enum`, `List`, `Nullable`,
 `Union`, `Foreign`, `Callback` — is proven against two real surfaces and the new
@@ -436,11 +475,15 @@ delivers the things a narrowing could not:
 
 1. `Handle` as a first-class type instead of an overloaded `Model` (§2.2) — the
    one change fluessig's own note says it declined *only* for golden-compat.
-2. Shape / projection / effects separated instead of eight accreted flags (§3).
+2. Shape and projection separated — and the effects axis deleted outright —
+   instead of eight accreted flags (§3).
 3. No serialized interchange document at all (§3) — not merely one instead of
    two, which is what an in-place narrowing would have reached for.
 4. Value-returning fallible callbacks designed in from the start (§2.1) rather
    than bolted onto an IR that rejects them.
+5. No `Json` carrier, by construction (§3). fluessig cannot delete its degrade
+   paths without breaking the cross-package consumers that lean on them; a
+   restart with a rustc-checked front end never grows them.
 
 If the resulting IR looks materially like `api.rs` with the entity references
 removed, the restart did not pay, and that is worth noticing early — at the end
@@ -498,7 +541,7 @@ callback, nothing is a stream — which is the point of a first milestone.
 
 | Step | Adds | Proves |
 |---|---|---|
-| 1 | `complete_json` → Python | the spine: derive → descriptor → exporter → backend → a real host process |
+| 1 | `complete_json` → Python | the spine: derive → descriptor → generator → backend → a real host process |
 | 2 | the same function → node/TS | one surface, two languages, no second declaration |
 | 3 | `Stream::from_json_schema()` → a handle with `push`/`snapshot` | **handles** (§2.2), incl. the factory mint |
 | 4 | `stream.changes()` → `for await` / generator | **streams + events** (§2.3), errors-as-events |
@@ -541,9 +584,10 @@ are failures of it, and the doc already tracks all three:
   is the single worst thing in the design, and §7 steps 3 and 6 exist to shrink
   it.
 - **The `Json` carrier** hands a language a degraded version: the value crosses,
-  the typed methods vanish. jedem's single-crate source of truth means there is no
-  cross-package resolution gap, so **jedem should have no `Json` carrier at all** —
-  any appearance is a defect, not a fallback.
+  the typed methods vanish. **Banned by construction** (§3): no `Json` type in
+  the vocabulary, no envelope projection, unlowerable types are compile errors.
+  It appears in this list only because the ban must be *kept* — the pressure to
+  add "just pass it as JSON for now" will recur, and §3 is the standing answer.
 - **`@manual`** means that language got a hand-written binding instead of a given
   one. It earns its keep as an escape hatch, and every use is still one place the
   promise was not kept.
@@ -560,9 +604,10 @@ name is a promise the roadmap owes, not a description of v1.
 **The metric the name implies.** Under the old name the health measure was the
 count of `Json` carriers and `@manual` ops. Under this one it is **coverage**: for
 each backend, what fraction of the declared surface actually lowers, and how many
-skip-notes remain. That number is mechanically computable from the surface
-document and every backend's output, it should only ever go up, and it is the one
-number that says whether the project is living up to what it is called.
+skip-notes remain. That number is mechanically computable, it should only ever go
+up, and it is the one number that says whether the project is living up to what it is called. (It is
+computed from the in-memory descriptors — `--dump-surface` shows them — against
+each backend's emitted output; there is no surface document, per §3.)
 
 ## 9. Decisions and open questions
 
