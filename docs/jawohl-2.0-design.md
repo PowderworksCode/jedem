@@ -5,7 +5,7 @@
 
 **Status:** design, from the owner's 2.0 doc.
 **Binding strategy:** jawohl 2.0 writes **no bindings by hand**. It is a full
-[calquer](./calquer-design.md) consumer from day one (owner's decision). §8 is
+[jedem](./jedem-design.md) consumer from day one (owner's decision). §8 is
 built around that constraint and its cost.
 **Scope:** the full 2.0 architecture, sequenced into phases that ship standalone.
 
@@ -57,7 +57,7 @@ broken.
 ## 2. Architecture
 
 The owner's diagram, with the one addition that matters for sequencing — a hard
-line between what needs calquer and what does not:
+line between what needs jedem and what does not:
 
 ```
   Pydantic / Zod / Valibot / DataAnnotations / Jakarta / garde
@@ -65,7 +65,7 @@ line between what needs calquer and what does not:
                           ▼   (host-language adapters — hand-written, thin)
                     JSON Schema
                           │
-════════════════ calquer boundary ════════════════
+════════════════ jedem boundary ════════════════
                           ▼
                      jawohl-core  (Rust)
         ┌─────────────────┼─────────────────┐
@@ -77,22 +77,22 @@ line between what needs calquer and what does not:
                     partial state
 ```
 
-Two independent tracks, and keeping them separate is what makes the calquer
+Two independent tracks, and keeping them separate is what makes the jedem
 coupling survivable (§8):
 
 - **Core track — pure Rust, blocked by nothing.** Parser, partial state,
   constraint IR, incremental validation, events. This is all of the hard
   engineering and none of the FFI.
-- **Surface track — gated on calquer.** Every language surface, in calquer's
+- **Surface track — gated on jedem.** Every language surface, in jedem's
   capability order.
 
 **JSON Schema is the interchange format, not the execution format.** The core
 compiles it to a constraint IR shaped for streaming evaluation (§4). The host
 adapters (Pydantic → JSON Schema, Zod → JSON Schema) are **hand-written per
-language and sit above calquer's generated surface** [confirmed by the owner] — they are host-language
-code that produces a string, not something calquer generates. This is what keeps
-"bindings stay thin" true: the generated binding is thin; the adapter is a
-separate, small, idiomatic library per ecosystem.
+language and sit above jedem's generated surface** [confirmed by the owner] —
+host-language code that produces a string, not something jedem generates. This
+is what keeps "bindings stay thin" true: the generated binding is thin; the
+adapter is a separate, small, idiomatic library per ecosystem.
 
 ---
 
@@ -276,8 +276,8 @@ correct handlers):
 
 **Errors are events, not exceptions.** `ValidationFailed` is a domain outcome —
 the consumer is *supposed* to keep receiving events and decide whether to cancel.
-This maps onto calquer's per-op stream error model, with jawohl setting it to
-errors-as-events rather than the throwing default (calquer §2.3). Only *parser*
+This maps onto jedem's per-op stream error model, with jawohl setting it to
+errors-as-events rather than the throwing default (jedem §2.3). Only *parser*
 failure — malformed input, or a §4.2 profile violation — terminates the stream.
 
 ---
@@ -294,9 +294,9 @@ stays in the host and runs there.
 A host predicate has no notion of "valid so far," and calling it on a partial
 value would be both wrong and expensive.
 
-This is exactly calquer's **value-returning, fallible callback** — the feature
-fluessig explicitly rejects [verified, `fluessig/src/api.rs:585`] and calquer
-adds (calquer §2.1). It is safe here for the reason calquer's rule requires:
+This is exactly jedem's **value-returning, fallible callback** — the feature
+fluessig explicitly rejects [verified, `fluessig/src/api.rs:585`] and jedem
+adds (jedem §2.1). It is safe here for the reason jedem's rule requires:
 `push()` is synchronous and host-called, so the callback fires re-entrantly on
 the host's own thread, inside that call. **jawohl must not offer a native
 validator on an async or streaming op**, or it forfeits the guarantee.
@@ -363,18 +363,18 @@ s.lowering_report();           // §6.2
 Raw JSON Schema is always supported and is the substrate; `jawohl.Stream(MyPydanticModel)`
 and `jawohl.stream(MyZodSchema)` are host-side sugar over it.
 
-**In calquer terms** [verified against calquer's IR]: `Stream::new` and
+**In jedem terms** [verified against jedem's IR]: `Stream::new` and
 `from_json_schema` are **factory ops minting a handle**; `push`/`snapshot`/`status`
 are synchronous **methods** on it; `changes()` is a **stream op**; a native
 validator is a **value-returning callback param**. jawohl exercises all three of
-calquer's hard three — which is what makes it a good acid test and also what
+jedem's hard three — which is what makes it a good acid test and also what
 makes §8 the risk.
 
 ---
 
 ## 8. Phasing
 
-Two tracks. The core track is unblocked; the surface track is gated on calquer.
+Two tracks. The core track is unblocked; the surface track is gated on jedem.
 
 ### Core track — pure Rust, starts immediately
 
@@ -386,41 +386,41 @@ Two tracks. The core track is unblocked; the surface track is gated on calquer.
 | **C4** | Incremental validation, propagation, early cancellation, `NumberProfile` | Level 3 complete |
 | **C5** | Native-validator hook + lowering report | needs a callback, so it lands with S3 |
 
-**C1 alone justifies the rewrite** and needs nothing from calquer.
+**C1 alone justifies the rewrite** and needs nothing from jedem.
 
-### Surface track — gated, in calquer's capability order
+### Surface track — gated, in jedem's capability order
 
-| Phase | Needs from calquer | Delivers |
+| Phase | Needs from jedem | Delivers |
 |---|---|---|
 | **S1** | steps 1–2 (free fns → python, node) | `complete_json` in Python + TS — closes the README promise open since May 2023 |
 | **S2** | step 3 (**handle mint**) | `Stream` with `push`/`snapshot`/`status` — the first genuinely useful surface |
 | **S3** | steps 4–5 (**streams**, **value-returning callbacks**) | `changes()` + native validators |
 | **S4** | step 6 (**.NET backend**) | .NET — technology unprescribed, whichever Rust→C# bindgen works — then the Pydantic/Zod/Valibot adapters |
 
-### The cost of "full calquer consumer from day one", stated plainly
+### The cost of "full jedem consumer from day one", stated plainly
 
 You chose this over staged hand-written bindings, so the consequence should be on
-the record: **jawohl 2.0 has no Python, TypeScript or .NET surface until calquer
+the record: **jawohl 2.0 has no Python, TypeScript or .NET surface until jedem
 ships handle-minting on those backends.** Today handle-minting exists on node and
 python only, and **.NET does not exist at all** [verified] — so S4, jawohl's
-fourth target language, is gated behind an entire new calquer backend.
+fourth target language, is gated behind an entire new jedem backend.
 
 Two things make that survivable, and they are the reason I would still take this
 bet:
 
 1. **The core track absorbs the wait.** C1–C4 is the majority of the engineering
-   and none of it is blocked. By the time calquer reaches step 3, jawohl should
+   and none of it is blocked. By the time jedem reaches step 3, jawohl should
    have a complete, tested Rust core waiting for a surface.
-2. **jawohl is the acid test that pulls calquer forward.** `findings.md`'s
+2. **jawohl is the acid test that pulls jedem forward.** `findings.md`'s
    method — author the complete real surface before freezing the IR — is what
    caught every gap in fluessig. jawohl's surface is small, precise, and hits all
    three hard cases, which makes it a far better forcing function than a demo
    crate.
 
-The residual risk is real: **jawohl's ship date is now calquer's slowest
+The residual risk is real: **jawohl's ship date is now jedem's slowest
 backend.** If that becomes unacceptable, the cheapest release valve is a
 temporary hand-written pyo3 binding for S1 only (a dozen lines for two free
-functions), thrown away when calquer step 1 lands. I have not built that in; it
+functions), thrown away when jedem step 1 lands. I have not built that in; it
 is available if the schedule bites.
 
 ---
@@ -450,10 +450,10 @@ is available if the schedule bites.
 7. **Org — resolved.** jawohl is in `genauai`, not `PowderworksCode`
    [verified]. The owner is doing a **transfer**, not a fork, and is handling it
    directly. Nothing in this design touches `genauai/jawohl`.
-8. **Only `complete_json` fits calquer's v1 boundary.** calquer v1 is functions
-   over plain values — no callbacks, handles, or streams (calquer design §1). Of
+8. **Only `complete_json` fits jedem's v1 boundary.** jedem v1 is functions
+   over plain values — no callbacks, handles, or streams (jedem design §1). Of
    jawohl's surface only Level 1 qualifies; `Stream` is a handle mint, `changes()`
-   is a stream, native validators are callbacks. With jawohl a full calquer
+   is a stream, native validators are callbacks. With jawohl a full jedem
    consumer from day one, §8's surface track is therefore gated end to end on
-   calquer steps 3–5. The core track (C1–C4) is unaffected and remains the right
+   jedem steps 3–5. The core track (C1–C4) is unaffected and remains the right
    place to spend the wait.

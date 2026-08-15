@@ -1,4 +1,4 @@
-# calquer — design
+# jedem — design
 
 > Expose a Rust function once; call it from every language, with its shape intact.
 
@@ -17,11 +17,11 @@ my reasoning, unproven.
 
 ## 1. Scope
 
-calquer takes **ordinary Rust** and projects its **functions** into other
+jedem takes **ordinary Rust** and projects its **functions** into other
 languages. That is the whole product.
 
 **Direction: Rust → others. One way.** The Rust crate is the source of truth and
-the implementation. calquer never imports a foreign surface into Rust, never
+the implementation. jedem never imports a foreign surface into Rust, never
 generates Rust from a `.d.ts`, and has no IDL. *(fluessig had a converter —
 `hinzu` — reading pi's TypeScript into an api surface. That is a separate tool
 and out of scope here.)*
@@ -29,13 +29,13 @@ and out of scope here.)*
 **What the user writes.** Their normal crate, plus annotations:
 
 ```rust
-use calquer::{export, surface, Record};
+use jedem::{export, surface, Record};
 
 pub struct Completer { /* the user's real, hand-written engine */ }
 
 #[export]
 impl Completer {
-    #[calquer(ctor)]
+    #[jedem(ctor)]
     pub fn new(schema: &str) -> anyhow::Result<Self> { … }
 
     /// Feed a chunk. Synchronous — the default.
@@ -50,7 +50,7 @@ pub struct Snapshot { pub path: String, pub complete: bool }
 surface! { name: "jawohl", version: "2.0.0", api: [Completer], types: [Snapshot] }
 ```
 
-Then `cargo calquer emit` writes `surface.json`, and `calquer-gen` generates the
+Then `cargo jedem emit` writes `surface.json`, and `jedem-gen` generates the
 per-language bindings. **No second copy of the model, and the exported `impl` is
 the impl that actually runs** — declaration/implementation drift is structurally
 impossible. [from notes: `derive-front-end.md` §2.7]
@@ -86,7 +86,7 @@ it away would be the expensive mistake — but none of them gates the first rele
 MCP generation, the effects flags, and every data-shaped concern are gone
 entirely (§4). What remains is one job done well.
 
-**The tension this creates, stated up front:** jawohl 2.0 is a full calquer
+**The tension this creates, stated up front:** jawohl 2.0 is a full jedem
 consumer from day one, and *nothing useful in jawohl fits inside the v1 boundary*
 — `Stream` is a handle mint, `changes()` is a stream, native validators are
 callbacks. Only `complete_json` is v1-shaped. So either jawohl waits for §7 steps
@@ -98,7 +98,7 @@ jawohl design's §8 costs that out.
 ## 2. The hard three
 
 fluessig solved these; the notes are the evidence base and I am not re-deriving
-them. What follows is what calquer **changes**, and why — and the driver for two
+them. What follows is what jedem **changes**, and why — and the driver for two
 of the three changes is jawohl 2.0, which needs more than pi ever did.
 
 ### 2.1 Callbacks — solved, then widened
@@ -107,7 +107,7 @@ of the three changes is jawohl 2.0, which needs more than pi ever did.
 sees **one uniform shape regardless of the source language**. Each backend's
 *generated* glue wraps its native callable at the FFI boundary. The core never
 learns whether the closure came from JS, Python, or Ruby. That contract is the
-single most valuable thing in the notes and calquer adopts it verbatim, along
+single most valuable thing in the notes and jedem adopts it verbatim, along
 with the per-backend non-blocking table (node `ThreadsafeFunction` NonBlocking,
 python `with_gil`, ruby GVL trampoline, .NET a pinned delegate + `GCHandle`,
 wasm keep-`Closure`-alive, php `Zval`).
@@ -127,7 +127,7 @@ validator —
 def username_available(value): return check_database(value)
 ```
 
-— is a callback into the host that **returns a verdict and can fail**. calquer
+— is a callback into the host that **returns a verdict and can fail**. jedem
 cannot defer this; it is the feature.
 
 So the uniform core shape widens:
@@ -135,7 +135,7 @@ So the uniform core shape widens:
 ```rust
 // fluessig
 Box<dyn Fn(A) + Send + Sync + 'static>
-// calquer
+// jedem
 Box<dyn Fn(A) -> Result<R, CallbackError> + Send + Sync + 'static>
 ```
 
@@ -143,7 +143,7 @@ Box<dyn Fn(A) -> Result<R, CallbackError> + Send + Sync + 'static>
 waiting for a value is only safe when the call originates on the host's own
 thread; from a Rust background thread it needs an async-oneshot bridge and, on a
 single-threaded runtime, deadlocks. fluessig deferred the feature precisely
-because of that. calquer takes it with a restriction instead:
+because of that. jedem takes it with a restriction instead:
 
 > **A value-returning or fallible callback may appear only on a synchronous op.**
 > It is invoked re-entrantly, on the host thread, inside that call. On an async
@@ -179,7 +179,7 @@ things with a ctor, and a factory-born class gets no public constructor.
 return as `ApiType::Model { model }` — the *same* spelling as a plain DTO —
 and tells them apart at lowering time by checking membership in the interface-name
 set. The note is explicit that this was chosen so that "existing goldens with
-DTO-returning ops are byte-identical." **calquer has no goldens.** So:
+DTO-returning ops are byte-identical." **jedem has no goldens.** So:
 
 ```rust
 ApiType::Handle { handle: String }   // a live object with methods
@@ -192,7 +192,7 @@ instead of a name-lookup against a derived set; `constructible_interfaces` and
 `returned_interface_name` stop existing as concepts; and a `Handle` naming
 something undeclared is an error rather than silently degrading into a DTO
 reference. This is the clearest example of a decision fluessig could not take
-and calquer can.
+and jedem can.
 
 jawohl needs this on day one: `Stream::from_json_schema(schema)` is a factory
 minting a stateful handle, and `stream.push` / `.snapshot()` / `.status(path)`
@@ -215,7 +215,7 @@ fallback.
 
 **The risk, carried over honestly:** `#[napi(async_iterator)]` is
 **experimental** in napi 3 and gated on `tokio_rt`. The retained poll cursor is
-the hedge, and calquer keeps it for that reason. [from notes — flagged by the
+the hedge, and jedem keeps it for that reason. [from notes — flagged by the
 note's own author.]
 
 **Inherited, and it turns out jawohl wants it:** the **dual error model** —
@@ -244,7 +244,7 @@ in-place narrowing could not:
 `api.json` (ops, models). With the entity graph gone forever there is no catalog
 — but `fluessig-gen` still takes `catalog.json` as a *required positional* and
 lifts the enum vocabulary out of `catalog.enums` to feed every backend
-[verified, `src/bin/fluessig-gen.rs:132,199`]. calquer emits **one
+[verified, `src/bin/fluessig-gen.rs:132,199`]. jedem emits **one
 `surface.json`**: types, enums, unions, consts, interfaces, ops.
 
 **Shape and projection are separated.** `ApiOp` accreted eight-plus flags one PR
@@ -253,7 +253,7 @@ at a time — `is_async`, `infallible`, `readonly`, `destructive`, `worker`,
 each an "additive optional field with `skip_serializing_if`" to preserve goldens
 [verified, `src/api.rs:154-229`]. They are three different kinds of thing mixed
 in one struct, which is why `load_api` needs a pile of cross-field legality
-checks. calquer separates:
+checks. jedem separates:
 
 - **kind** — what the op *is*: `Ctor | Method | Factory | Stream | Subscription | Manual`
 - **projection** — how it *crosses*: async opt-out, result-envelope, name pins
@@ -300,8 +300,8 @@ All four are **never**, per the owner's decision. Stating them precisely, becaus
 | **DDL** (`CREATE TABLE`, 3 dialects) | **never** | Deleted. `src/sql.rs`. |
 | **ORM models** (SQLAlchemy, Django, TS tables, Drizzle) | **never** | Deleted. `src/codegen.rs`. |
 | **Format codecs** (Mongo, JSONL, Parquet, Mermaid) | **never** | Deleted — and mostly never built past design. |
-| **MCP surface generation** | **never** | Deleted. `src/bindgen/mcp.rs` (518 ln) turned an op surface into an MCP tool manifest. Real, but it is a *second product* wearing calquer's clothes, and starting over means starting simple. It takes the `readonly`/`destructive`/`worker` flags with it (§3) — nothing else consumed them [verified]. |
-| **Arrow data plane** | **never** *as a data plane* | `src/data.rs` deleted. **But** `ArrowBatch` survives as an ordinary opaque type that crosses the FFI as bytes / `byte[]`, because it is just a type in someone's signature. That is not a data plane; it is calquer doing its one job on a type that happens to be Arrow. |
+| **MCP surface generation** | **never** | Deleted. `src/bindgen/mcp.rs` (518 ln) turned an op surface into an MCP tool manifest. Real, but it is a *second product* wearing jedem's clothes, and starting over means starting simple. It takes the `readonly`/`destructive`/`worker` flags with it (§3) — nothing else consumed them [verified]. |
+| **Arrow data plane** | **never** *as a data plane* | `src/data.rs` deleted. **But** `ArrowBatch` survives as an ordinary opaque type that crosses the FFI as bytes / `byte[]`, because it is just a type in someone's signature. That is not a data plane; it is jedem doing its one job on a type that happens to be Arrow. |
 
 Dropped with them: the **entity graph** itself (`src/ir.rs`, `src/catalog.rs`),
 `catalog.json`, the `Entity` / `Edge` / `AbstractRoot` derives, `Id<T>`,
@@ -311,7 +311,7 @@ weak-entity / composition / column-parity machinery.
 **Consequence, stated plainly:** **entl and disponent stop being consumers.**
 They own their schemas. `crates/entl-schema-derive` (1,212 ln) and
 `crates/disponent-schema-derive` (1,098 ln) exist only as entity parity gates and
-do not carry over. This removes calquer's two oldest dogfood targets and replaces
+do not carry over. This removes jedem's two oldest dogfood targets and replaces
 them with pidgin and jawohl — which is the right trade, since both new ones are
 *binding* consumers and the old ones were schema consumers.
 
@@ -348,7 +348,7 @@ call sites [verified]. There is no other coupling to sever.
 
 Two things this table makes obvious: **handle-minting exists on node and python
 only** — five backends emit honest skip-notes — and **.NET is absent entirely**
-[verified]. Those are calquer's two real engineering fronts, and jawohl needs
+[verified]. Those are jedem's two real engineering fronts, and jawohl needs
 both (`Stream` handle × Python/TS/.NET).
 
 **The op-layer IR: 785 lines**, as *prior art*. Under a restart it is re-derived
@@ -357,7 +357,7 @@ both (`Stream` handle × Python/TS/.NET).
 version is closer to a refactor of a known-good design than a blank page.
 
 **The op half of the derive front end.** Of `fluessig-derive` +
-`fluessig-derive-macros` (4,916 ln, 7 derives), calquer keeps `#[export]`
+`fluessig-derive-macros` (4,916 ln, 7 derives), jedem keeps `#[export]`
 (710 ln), `Record`, `Union`, `Enum`, `Scalar`, `catalog!`, plus spans, doc
 capture and the drift guard.
 
@@ -369,7 +369,7 @@ without a runnable round-trip does not count as done.
 
 ### Rewritten
 
-The op IR (§3), the `surface!` exporter, `calquer-gen`'s CLI (the catalog
+The op IR (§3), the `surface!` exporter, `jedem-gen`'s CLI (the catalog
 positional goes away), and the loader — which shrinks a lot once the flag
 cross-checks are structural.
 
@@ -428,7 +428,7 @@ published for Javascript and Python."*
 
 ```rust
 // jawohl/src/lib.rs — the existing function, plus four lines
-use calquer::{export, surface};
+use jedem::{export, surface};
 
 pub struct Jawohl;
 
@@ -442,8 +442,8 @@ surface! { name: "jawohl", version: "2.0.0", api: [Jawohl] }
 ```
 
 ```sh
-cargo calquer emit                 # -> surface.json
-calquer-gen surface.json --python  # -> the pyo3 binding
+cargo jedem emit                 # -> surface.json
+jedem-gen surface.json --python  # -> the pyo3 binding
 maturin develop
 ```
 
@@ -476,71 +476,76 @@ callback, nothing is a stream — which is the point of a first milestone.
 Steps 3–5 are exactly the hard three, in ascending order of risk, each against a
 real consumer rather than a demo. And per `findings.md`'s method: **author
 jawohl 2.0's and pidgin's complete surfaces before freezing the IR** — that is
-what caught every gap in fluessig, and it is the cheapest insurance calquer can buy.
+what caught every gap in fluessig, and it is the cheapest insurance jedem can buy.
 
 ---
 
 ## 8. Does the design live up to its name?
 
-A **calque** translates a phrase part by part, preserving its structure, rather
-than transliterating its sounds. The test: does a Rust function arrive in the
-target language with its *shape* intact and its *spelling* native?
+**jedem** — German *to each*, the dative of *jeder*. The name sets a coverage
+test, and it is a harder one than the design's previous name asked for: not *is
+the translation faithful?* but **does every language actually get it?**
 
-**Where it earns the name:**
+That is the better question, because it is countable. Three things in the design
+are failures of it, and the doc already tracks all three:
 
-- **The uniform callback contract.** The core sees one `Box<dyn Fn>`; every
-  language supplies its own native callable — a JS closure, a Python callable, a
-  Ruby `Proc`, a PHP `Zval`. Same structure, each part rendered natively. This is
-  a calque in the exact linguistic sense.
-- **Position-aware binary spelling.** A `bytes` param becomes `Uint8Array` (a
-  view), a `bytes` return becomes `Buffer` (owned) — because that is how a JS
-  developer would have written it. The type didn't change; its spelling became
-  idiomatic.
-- **Synchronous by default.** fluessig originally wrapped everything in a
-  `Promise` because the machinery was there. A sync Rust function becoming a sync
-  JS function is the faithful translation; the `Promise` was an accent.
-- **Structured unions** as native discriminated unions, and **streams** as real
-  `for await` iterables rather than a `next()` cursor a consumer must wrap.
+**Where every language does get it:**
 
-**Where it does not, and these are the honest edges:**
+- **The callback contract.** The core sees one `Box<dyn Fn>`; each language
+  supplies its own native callable — a JS closure, a Python callable, a Ruby
+  `Proc`, a PHP `Zval`. One contract, seven native spellings, nobody left out.
+  This is the design's best claim on the name.
+- **Idiomatic spelling, not lowest-common-denominator.** A `bytes` param becomes
+  `Uint8Array` and a `bytes` return becomes `Buffer`, because that is what a JS
+  developer would have written. A sync Rust function becomes a sync JS function
+  rather than a `Promise`. Unions become native discriminated unions; streams
+  become real `for await` iterables. Each language gets the version *it* would
+  have written, not a transliteration of Rust.
 
-- **The `Json` carrier.** Where fluessig can't resolve a type it degrades to a
-  JSON string — the note's own words: *"the typed methods on that object vanish."*
-  That is transliteration: the sounds survive, the structure is lost. calquer's
-  advantage is that a single Rust crate is the source of truth, so there is no
-  cross-package resolution gap; **calquer should have no `Json` carrier at all,**
-  and any appearance of one is a design failure rather than a fallback.
-- **`@manual`.** The op is carried across untranslated by hand. It earns its keep
-  as an escape hatch, but every `@manual` is a word the translator gave up on.
-- **Skip-notes.** Five of eight backends emit nothing for a handle mint. Not a bad
-  translation — an *absent* one. Honest, and §7 steps 3 and 6 exist to shrink it.
-- **PHP's sync-only callbacks.** The shape is preserved but the *semantics*
-  quietly narrow: the same signature means something weaker there. The notes
-  handle this correctly — a loud marker rather than a silent lie — but it is the
-  one place the calque is imperfect and cannot be made perfect, because the
-  runtime genuinely differs.
+**Where some language does not:**
 
-**Verdict.** The name is apt and it is also a standard the design can be held to.
-The single sharpest use of it: **`Json` and `@manual` are the two places calquer
-stops being a calque**, so the count of both is the right health metric for the
-project. If it trends up, calquer is drifting toward transliteration.
+- **Skip-notes are the sharpest failure.** Five of eight backends emit *nothing*
+  for a handle mint (§5). Not a poor rendering — an absence. Under this name that
+  is the single worst thing in the design, and §7 steps 3 and 6 exist to shrink
+  it.
+- **The `Json` carrier** hands a language a degraded version: the value crosses,
+  the typed methods vanish. jedem's single-crate source of truth means there is no
+  cross-package resolution gap, so **jedem should have no `Json` carrier at all** —
+  any appearance is a defect, not a fallback.
+- **`@manual`** means that language got a hand-written binding instead of a given
+  one. It earns its keep as an escape hatch, and every use is still one place the
+  promise was not kept.
+- **PHP's sync-only callbacks** are the one imperfection that cannot be removed:
+  the signature is identical but means something weaker, because the runtime
+  genuinely differs. Handled correctly — a loud marker, not a silent lie — but the
+  name is not fully satisfied there and never will be.
 
----
+**And the honest one, at v1.** The v1 boundary (§1) ships to **two** languages.
+"To each" is an aspiration the first release deliberately does not meet. That is
+the right call — two languages done properly beats eight done partially — but the
+name is a promise the roadmap owes, not a description of v1.
+
+**The metric the name implies.** Under the old name the health measure was the
+count of `Json` carriers and `@manual` ops. Under this one it is **coverage**: for
+each backend, what fraction of the declared surface actually lowers, and how many
+skip-notes remain. That number is mechanically computable from the surface
+document and every backend's output, it should only ever go up, and it is the one
+number that says whether the project is living up to what it is called.
 
 ## 9. Decisions and open questions
 
 ### Resolved
 
-1. **Repo and name — `PowderworksCode/calquer`, a new repo.** Not a fluessig
+1. **Repo and name — `PowderworksCode/jedem`, a new repo.** Not a fluessig
    rename. Consequence: pidgin's existing `#[fluessig(...)]` attributes need a
-   rename pass to `#[calquer(...)]` when it migrates, and `<Iface>Core` /
+   rename pass to `#[jedem(...)]` when it migrates, and `<Iface>Core` /
    `cargo fluessig emit` / `fluessig-gen` all get renamed spellings.
 2. **.NET binding technology — not prescribed.** Whichever Rust→C# bindgen
    actually works, chosen on contact (§1). This is deliberately a §7-step-6
    decision, not a design-time one; no research is owed before then.
 3. **jawohl's schema adapters — hand-written per language.** Pydantic → JSON
    Schema, Zod → JSON Schema and friends are ordinary host-language libraries
-   sitting *above* calquer's generated surface. calquer does not generate them,
+   sitting *above* jedem's generated surface. jedem does not generate them,
    and they are what keeps "bindings stay thin" true.
 4. **MCP — dropped, permanently** (§4), taking `readonly`/`destructive`/`worker`
    with it (§3).

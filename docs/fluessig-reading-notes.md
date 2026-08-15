@@ -1,4 +1,4 @@
-# calquer — reading notes (pre-design)
+# jedem — reading notes (pre-design)
 
 Status: reading only. No design here. No commits/PRs/pushes made in either repo.
 Everything under "Verified" was run or read directly; "Inferred" is my reasoning
@@ -33,7 +33,7 @@ only thing forcing a catalog to exist for a bindings-only build — a
 one-file plumbing change (make the catalog optional, or move enums into
 `api.json`), not a rewrite.
 
-### Verified — fluessig is *already* calquer, by commit history
+### Verified — fluessig is *already* jedem, by commit history
 
 - Last 60 commits (2026-07-21 → 2026-08-08) touched:
   `src/bindgen/*` **87** times, `src/api.rs` **8** times,
@@ -56,7 +56,7 @@ one-file plumbing change (make the catalog optional, or move enums into
 `#[derive(Entity)]` — with `catalog.json`/`api.json` unchanged.
 `derive-front-end-decisions.md` §2 records it as DONE. That is a precedent that
 this codebase can absorb a total front-end swap without a restart, and it is the
-same magnitude of change calquer needs.
+same magnitude of change jedem needs.
 
 ### The honest case *for* restarting
 
@@ -70,9 +70,9 @@ Not structural, but real, and the user should weigh it:
    `fluessig-derive-macros` = 4,916 lines exporting 7 derives; **`Entity`,
    `AbstractRoot`, `Edge`** (plus `Id<T>`, `ref_cols`, `shares`, `flatten`,
    polymorphic key-enum generation, `EntityDescriptor`/`EdgeDescriptor`) are
-   entity-graph-only. calquer needs `Record`, `Union`, `Enum`, `Scalar`,
+   entity-graph-only. jedem needs `Record`, `Union`, `Enum`, `Scalar`,
    `catalog!` and `#[fluessig::export]`. Roughly half this crate pair is dead
-   weight for calquer — but it is *deletable* weight, not entangling weight.
+   weight for jedem — but it is *deletable* weight, not entangling weight.
 3. **The dogfood consumers are schemas.** `entl-schema-derive` (1,212 ln) and
    `disponent-schema-derive` (1,098 ln) exist purely as entity-graph parity
    gates. Narrowing means deciding whether to keep supporting them.
@@ -100,7 +100,7 @@ scratch. Those are legitimate and I can't adjudicate them from the tree.
 
 ---
 
-## 2. What in the notes is load-bearing for calquer
+## 2. What in the notes is load-bearing for jedem
 
 Ranked. The first three are the brief's "hard three", and the headline is that
 **fluessig has already solved them** — the notes are not a research plan, they
@@ -119,14 +119,14 @@ are an implementation record with tests.
   enumeration of pi found *every* callback is forward-only, sync, void-returning,
   single-arg. `is_async` / `fallible` are reserved in `CallbackSig` and
   **rejected by `load_api`**. Duplex is modelled as two forward-only halves plus
-  external correlation. calquer should inherit this restriction verbatim; it is
+  external correlation. jedem should inherit this restriction verbatim; it is
   what keeps callbacks from requiring an async-oneshot bridge.
 - **Per-backend non-blocking table** (node TSFN `NonBlocking`, python
   `with_gil`, ruby GVL trampoline, java `AttachCurrentThread`, wasm keep-`Closure`-alive,
   cpp `std::function`, php `Zval`). This table is the expensive learning.
 - **PHP is the honest edge:** single-thread request model means callbacks are
   **sync-same-request-thread only**; off-thread invocation is UB. Ruled
-  documented-limitation, not a hard error. calquer must decide the same thing.
+  documented-limitation, not a hard error. jedem must decide the same thing.
 - Status: all 7 backends lower `Callback` + `Subscription` (PRs #87–#91).
   Tests: `callback_lowering.rs`, `{wasm,ruby,cpp,php,java}_callback_lowering.rs`,
   `subscription_lowering.rs`.
@@ -150,7 +150,7 @@ are an implementation record with tests.
   skip-note.
 - Status: node + python lower fully; **cpp/java/ruby/php/wasm emit honest
   skip-notes**. Test: `tests/class_handle_return.rs`. This is the *least*
-  finished of the hard three and the most likely real work item for calquer.
+  finished of the hard three and the most likely real work item for jedem.
 
 ### (c) `async-iterable-streams.md` (+ `-python`, `-ruby`) — LOAD-BEARING, SOLVED for node
 
@@ -162,7 +162,7 @@ are an implementation record with tests.
   `AsyncGenerator::complete` → `PollStream::close()`, with `impl Drop` as backstop;
   `close()` must be idempotent.
 - **Risk flagged in the note itself:** `#[napi(async_iterator)]` is
-  **experimental** in napi 3 and gated on `tokio_rt`. calquer inherits that
+  **experimental** in napi 3 and gated on `tokio_rt`. jedem inherits that
   exposure. The retained poll cursor is the hedge.
 - **Dual error model** — the sharpest reusable decision: *streams* use
   errors-as-events (a terminal error event then completion, `next()` never
@@ -170,16 +170,16 @@ are an implementation record with tests.
   throw. Per-op opt-in via `@streamError`; node's default is now
   reject-the-pull (safe-by-default), with error-as-event as mirror-a-library mode.
 
-### (d) `derive-front-end.md` + `derive-front-end-decisions.md` — LOAD-BEARING for *how calquer is authored*
+### (d) `derive-front-end.md` + `derive-front-end-decisions.md` — LOAD-BEARING for *how jedem is authored*
 
 - **"The impl is the interface."** `#[fluessig::export] impl Foo { … }` derives
   `api.json` from the code that actually runs, so declaration/implementation
   drift is impossible. This is the uniffi consumption model and it is exactly
-  calquer's thesis. Op kinds: `ctor` / unary / `stream` / `manual`, plus flags
+  jedem's thesis. Op kinds: `ctor` / unary / `stream` / `manual`, plus flags
   `async`, `readonly`, `destructive`, `result`, `name = "…"`, and the
   interface-level `single_threaded`.
 - **Synchronous is the GLOBAL DEFAULT; `#[fluessig(async)]` is the opt-out.**
-  This was an *inversion* forced by pidgin, and it is a decision calquer should
+  This was an *inversion* forced by pidgin, and it is a decision jedem should
   simply inherit — async-ness is decided in exactly one place, per op, meaning
   the same thing on every backend. There is deliberately no catalog-level lever.
 - **Infallibility is inferred from the Rust return type** (`T` vs `Result<T>`),
@@ -192,14 +192,14 @@ are an implementation record with tests.
   regenerate-validate-diff `#[test]` drift guard.
 - **`syn` + `darling`, no reflection substrate.** `facet` is pre-1.0 with
   attributes "in flux"; `bevy_reflect` is a runtime system. Reasoning holds for
-  calquer unchanged.
+  jedem unchanged.
 - Also load-bearing and easy to miss: `single_threaded` (a thread-confined
   `!Send` core, **node-only**, other backends emit nothing + an explicit
   skip-note rather than a `Send`-assuming handle that breaks the consumer's
   build) and the **fail-loud-not-silent** discipline generally — spanned compile
   errors with verbatim messages, re-checked at the loader.
 
-### (e) `findings.md` — mostly NOT load-bearing for calquer
+### (e) `findings.md` — mostly NOT load-bearing for jedem
 
 It is the entity-graph acid test (28 entl tables, FK-in-PK, polymorphic families,
 column-order parity, `@defaultValue`). Almost all of it dies with the entity
@@ -210,14 +210,14 @@ graph. Three things survive:
   list returns, list-typed fields, and **optional params** (the note flags that
   the extractor dropped param optionality — a real emitter must keep it).
 - The **method**: author the complete real surface before freezing the IR. That
-  is what caught every gap, and calquer should repeat it against pidgin.
+  is what caught every gap, and jedem should repeat it against pidgin.
 - The `@manual` escape hatch earning its keep (`watch`, host-callback re-entry).
 
 ### (f) `java-backend.md`, `specter-navigators.md`, `sampo.md`, `plan.txt`, `entl_derive_sketch.rs` — not yet read
 
 `java-backend.md` is likely relevant (JNI-vs-Panama rationale is summarised in
 the CHANGELOG). `entl_derive_sketch.rs` is the entity-graph acid test and is
-almost certainly irrelevant to calquer.
+almost certainly irrelevant to jedem.
 
 ---
 
@@ -273,9 +273,9 @@ jawohl is 58 lines of dependency-free `std` Rust. "Redesign and polish" here is
 close to a rewrite-in-an-afternoon, and the interesting questions are all
 behavioural (what *should* a partial-JSON completer do at the edges?) rather than
 structural. It is also — and this is the connection worth flagging — a perfect
-**calquer dogfood**: two pure functions, `&str → Result<String, E>`, no state, no
+**jedem dogfood**: two pure functions, `&str → Result<String, E>`, no state, no
 callbacks, no streams, no handles. It is very nearly the minimal case of
 "expose a Rust function everywhere", and the README's unfulfilled Python/JS
-promise is exactly the thing calquer exists to deliver.
+promise is exactly the thing jedem exists to deliver.
 
 Awaiting the jawohl design doc before any design work.
