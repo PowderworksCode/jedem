@@ -10,8 +10,9 @@ Home: **jedem.dev**
 **Status: design only. There is no code yet.**
 
 jedem takes ordinary Rust and projects its **functions** into other languages.
-The user annotates a normal crate; jedem emits a surface description and
-generates per-language bindings from it. Direction is Rust → others, one way.
+The user annotates a normal crate and runs one command; jedem reads the
+descriptors the macros produced and writes the bindings. No intermediate file, no
+interchange format. Direction is Rust → others, one way.
 
 It is the successor to [fluessig][], narrowed from "describe a typed entity graph
 once, project it everywhere" down to functions alone. DDL, ORM models, format

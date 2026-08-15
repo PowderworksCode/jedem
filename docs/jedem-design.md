@@ -50,9 +50,9 @@ pub struct Snapshot { pub path: String, pub complete: bool }
 surface! { name: "jawohl", version: "2.0.0", api: [Completer], types: [Snapshot] }
 ```
 
-Then `cargo jedem emit` writes `surface.json`, and `jedem-gen` generates the
-per-language bindings. **No second copy of the model, and the exported `impl` is
-the impl that actually runs** — declaration/implementation drift is structurally
+Then `cargo jedem generate` writes the per-language bindings. One command, no
+intermediate file. **No second copy of the model, and the exported `impl` is the
+impl that actually runs** — declaration/implementation drift is structurally
 impossible. [from notes: `derive-front-end.md` §2.7]
 
 **Languages, tiered by actual consumer demand** — not by ambition. The two known
@@ -240,12 +240,38 @@ the JSON envelope as the explicit opt-out. [verified: `tests/union_structured.rs
 Beyond §2.2's `Handle`, three IR changes that a restart can make and an
 in-place narrowing could not:
 
-**One document, not two.** fluessig splits `catalog.json` (entities, enums) from
-`api.json` (ops, models). With the entity graph gone forever there is no catalog
-— but `fluessig-gen` still takes `catalog.json` as a *required positional* and
-lifts the enum vocabulary out of `catalog.enums` to feed every backend
-[verified, `src/bin/fluessig-gen.rs:132,199`]. jedem emits **one
-`surface.json`**: types, enums, unions, consts, interfaces, ops.
+**No serialized document at all.** fluessig splits `catalog.json` (entities,
+enums) from `api.json` (ops, models), and an earlier draft of this doc proposed
+merging them into one `surface.json`. Both are wrong. The JSON existed for
+exactly one reason, stated in fluessig's own locked-decisions table: *"Language ↔
+core interchange — `catalog.json`, versioned, fully resolved — Rust core never
+embeds Node"* [verified, `notes/design.md:113`]. The front end was TypeSpec, a
+Node program; the engine was Rust; JSON was how they spoke.
+
+**TypeSpec was deleted. The boundary it crossed no longer exists.** With a Rust
+derive front end and a Rust generator, `surface.json` is Rust serializing to JSON
+so that Rust can immediately parse it back, inside one toolchain. It is a vestige
+of a language boundary that was removed a hundred commits ago.
+
+So jedem has no interchange document. The derive produces `&'static` descriptors;
+a bin target in the user's crate links the generator as a **library** and calls it
+on those descriptors directly. `cargo jedem generate` runs that bin. What
+disappears with the JSON: a serde round-trip, a schema to version, the
+`skip_serializing_if` house style that shaped every flag added to `ApiOp`, and a
+whole class of "the checked-in document is stale" failure.
+
+Two things the JSON was quietly doing, and their replacements:
+
+- **The drift guard** diffed a regenerated catalog against a committed one.
+  Replaced by goldening the **generated bindings** instead — a strictly better
+  gate, because it catches generator changes too, not just front-end changes.
+- **Debuggability** — "what did the macro actually see?" Kept as
+  `cargo jedem generate --dump-surface`, explicitly a debug artifact and
+  explicitly **not** an interface anyone may generate from.
+
+Cross-crate surfaces get better rather than worse: crate B's descriptors are
+`&'static` items that crate A links and references directly, type-checked by
+rustc, instead of two JSON documents merged by name.
 
 **Shape and projection are separated.** `ApiOp` accreted eight-plus flags one PR
 at a time — `is_async`, `infallible`, `readonly`, `destructive`, `worker`,
@@ -354,7 +380,11 @@ both (`Stream` handle × Python/TS/.NET).
 **The op-layer IR: 785 lines**, as *prior art*. Under a restart it is re-derived
 (§3), but the type vocabulary — `Scalar`, `Model`, `Enum`, `List`, `Nullable`,
 `Union`, `Foreign`, `Callback` — is proven against two real surfaces and the new
-version is closer to a refactor of a known-good design than a blank page.
+version is closer to a refactor of a known-good design than a blank page. Note
+what shrinks in the port: much of `api.rs` is serde scaffolding — `untagged`,
+`deny_unknown_fields`, `skip_serializing_if` on every added flag, `default` fns,
+and a `load_api` that re-validates a document Rust just wrote. With no
+interchange document (§3) that scaffolding has nothing to do.
 
 **The op half of the derive front end.** Of `fluessig-derive` +
 `fluessig-derive-macros` (4,916 ln, 7 derives), jedem keeps `#[export]`
@@ -369,9 +399,11 @@ without a runnable round-trip does not count as done.
 
 ### Rewritten
 
-The op IR (§3), the `surface!` exporter, `jedem-gen`'s CLI (the catalog
-positional goes away), and the loader — which shrinks a lot once the flag
-cross-checks are structural.
+The op IR (§3) — now plain in-memory Rust types rather than a serde schema,
+since nothing serializes them (§3). The `surface!` exporter, the
+`cargo jedem generate` driver (fluessig's two-step emit-then-generate CLI
+collapses to one), and the loader — which shrinks a lot once the flag
+cross-checks are structural and there is no untrusted document to validate.
 
 ### Abandoned
 
@@ -405,7 +437,8 @@ delivers the things a narrowing could not:
 1. `Handle` as a first-class type instead of an overloaded `Model` (§2.2) — the
    one change fluessig's own note says it declined *only* for golden-compat.
 2. Shape / projection / effects separated instead of eight accreted flags (§3).
-3. One document instead of catalog + api (§3).
+3. No serialized interchange document at all (§3) — not merely one instead of
+   two, which is what an in-place narrowing would have reached for.
 4. Value-returning fallible callbacks designed in from the start (§2.1) rather
    than bolted onto an IR that rejects them.
 
@@ -442,8 +475,7 @@ surface! { name: "jawohl", version: "2.0.0", api: [Jawohl] }
 ```
 
 ```sh
-cargo jedem emit                 # -> surface.json
-jedem-gen surface.json --python  # -> the pyo3 binding
+cargo jedem generate --python    # -> the pyo3 binding
 maturin develop
 ```
 
