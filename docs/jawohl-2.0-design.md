@@ -369,10 +369,10 @@ Raw JSON Schema is always supported and is the substrate; `jawohl.Stream(MyPydan
 and `jawohl.stream(MyZodSchema)` are host-side sugar over it.
 
 **In jedem terms** [mapped against the jedem design — jedem has no code yet]:
-`Stream::new` and
-`from_json_schema` are **factory ops minting a handle**; `push`/`snapshot`/`status`
-are synchronous **methods** on it; `changes()` is a **stream op**; a native
-validator is a **value-returning callback param**. jawohl exercises all three of
+`Stream::new` is a **ctor** and `from_json_schema` a **factory**, both minting
+the same handle; `push`/`snapshot`/`status` are synchronous **methods** on it;
+`changes()` is a **stream op**; a native validator is a **value-returning
+callback param**. jawohl exercises all three of
 jedem's hard three — which is what makes it a good acid test and also what
 makes §8 the risk.
 

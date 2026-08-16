@@ -15,6 +15,36 @@ my reasoning, unproven.
 
 ---
 
+## What we want, and why
+
+**What:** a normal Rust crate that also ships a native library in every other
+language. The author annotates the crate and runs one command; each language
+gets bindings it would plausibly have written by hand — sync functions stay
+sync, errors raise natively, unions arrive as real discriminated unions.
+
+**Why now:** two in-house consumers need exactly this and are blocked without
+it. **pidgin** has ~157 hand-written binding symbols across node, python and php
+that are almost entirely generatable. **jawohl 2.0** is a streaming parser whose
+whole premise is feeling native in Python, TypeScript and .NET — its 1.0 README
+has owed Python and JS wrappers since May 2023.
+
+**Why not uniffi:** the pitch is the same — uniffi proved it in production. But
+uniffi's first-class targets are Kotlin and Swift; node/TS, both consumers'
+first requirement, is third-party there, and the shapes our consumers need most
+(value-returning callbacks, factory-minted handles, async-iterable streams with
+a chosen error model) are exactly where we hold ~13,000 lines of proven,
+consumer-driven backend code from fluessig. Adopting uniffi would mean starting
+those from zero inside someone else's architecture. [speculation — positioning,
+not benchmarked; revisit if the reuse claim in §5 fails.]
+
+**Why a restart rather than narrowing fluessig:** the owner's call, made with
+the evidence in view — the reading found no structural defect forcing it (§6).
+The restart is bought back by four IR decisions fluessig could not take without
+breaking its consumers, plus one it explicitly declined for golden-compat; §6
+lists all five and names the failure condition.
+
+---
+
 ## 1. Scope
 
 jedem takes **ordinary Rust** and projects its **functions** into other
@@ -47,8 +77,13 @@ impl Completer {
 #[derive(Record)]
 pub struct Snapshot { pub path: String, pub complete: bool }
 
-surface! { name: "jawohl", version: "2.0.0", api: [Completer], types: [Snapshot] }
+surface! { name: "jawohl", version: "2.0.0", api: [Completer] }
+// records like Snapshot are collected by reachability from the exported ops
 ```
+
+*(Note the shape deliberately: a ctor plus methods is a **handle** — §2.2,
+beyond the v1 boundary below. This example shows the full product; the
+v1-shaped version of the same crate is §7's example, free functions only.)*
 
 Then `cargo jedem generate` writes the per-language bindings. One command, no
 intermediate file. **No second copy of the model, and the exported `impl` is the
@@ -165,7 +200,10 @@ validator must do it itself and block, or use the two-forward-halves pattern the
 notes document.
 
 `Shape::Subscription` (register → handle whose drop/`unsubscribe()` deregisters)
-carries over intact. jawohl's `ValidationFailed` listeners are exactly it.
+carries over intact — for **pidgin**, whose `onEvent`/`onExit` are its exact
+shape. jawohl, note, is *not* a Subscription consumer: its design drains an
+append-only event log through a stream op (`changes()`), it registers no
+listeners.
 
 ### 2.2 Handles — solved, with the IR corrected
 
@@ -176,28 +214,31 @@ class.** A pure-Rust core cannot name or build a napi/pyo3 class; the *binding*
 wraps. Also inherited: emit the handle class for anything constructible, not just
 things with a ctor, and a factory-born class gets no public constructor.
 
-**Changed — the one place the restart pays for itself.** fluessig spells a handle
+**Changed — the first of the restart's payoffs (§6 counts five).** fluessig spells a handle
 return as `ApiType::Model { model }` — the *same* spelling as a plain DTO —
 and tells them apart at lowering time by checking membership in the interface-name
 set. The note is explicit that this was chosen so that "existing goldens with
 DTO-returning ops are byte-identical." **jedem has no goldens.** So:
 
 ```rust
-ApiType::Handle { handle: String }   // a live object with methods
-ApiType::Record { record: String }   // a plain data struct
+Type::Handle(InterfaceId)   // a live object with methods
+Type::Record(RecordId)      // a plain data struct
 ```
 
-Two different things get two different spellings. The consequences are real, not
-cosmetic: "does this op mint a handle?" becomes a **parse-time type question**
-instead of a name-lookup against a derived set; `constructible_interfaces` and
+— and the payloads are **references, not name strings**, because nothing
+serializes (§3): a `Handle` can only be constructed pointing at an interface
+that exists. Two different things get two different spellings. The consequences
+are real, not cosmetic: "does this op mint a handle?" becomes a question the
+type system answers at construction instead of a name-lookup against a derived
+set; `constructible_interfaces` and
 `returned_interface_name` stop existing as concepts; and a `Handle` naming
 something undeclared is an error rather than silently degrading into a DTO
 reference. This is the clearest example of a decision fluessig could not take
 and jedem can.
 
-jawohl needs this on day one: `Stream::from_json_schema(schema)` is a factory
-minting a stateful handle, and `stream.push` / `.snapshot()` / `.status(path)`
-are its methods.
+jawohl's first *useful* surface needs this (§7 step 3 — post-v1, per §1's
+boundary): `Stream::from_json_schema(schema)` is a factory minting a stateful
+handle, and `stream.push` / `.snapshot()` / `.status(path)` are its methods.
 
 **Deferred:** an *async* or *stream* factory op (the mint itself wrapped in a
 promise). Synchronous factories cover both consumers. Meanwhile: a would-be async
@@ -337,8 +378,9 @@ considered changing and kept, because the notes' reasoning survives:
 - **Infallibility is inferred** from `T` vs `Result<T>`, and propagates into the
   shared core trait. Ruby stays the honest edge: its arg marshalling is itself
   fallible, so a true no-raise `-> T` is emitted only for zero-marshalling ops.
-- **Derive → `&'static` descriptor → separate exporter.** Macros never write
-  files. Explicit `surface!` root list, **not** `inventory`/`linkme`
+- **Derive → `&'static` descriptor → separate generation step.** Macros never
+  write files. Explicit `surface!` root list (records ride along by
+  reachability), **not** `inventory`/`linkme`
   link-sections (flaky on wasm). `syn` + `darling`; no reflection substrate
   (`facet` is pre-1.0 with attributes "in flux"; `bevy_reflect` is a runtime
   system).
@@ -439,10 +481,11 @@ without a runnable round-trip does not count as done.
 ### Rewritten
 
 The op IR (§3) — now plain in-memory Rust types rather than a serde schema,
-since nothing serializes them (§3). The `surface!` exporter, the
+since nothing serializes them. The `surface!` root-list macro, the
 `cargo jedem generate` driver (fluessig's two-step emit-then-generate CLI
-collapses to one), and the loader — which shrinks a lot once the flag
-cross-checks are structural and there is no untrusted document to validate.
+collapses to one), and the validator — fluessig's `load_api` minus the document:
+the semantic legality checks survive, the parse-and-revalidate of a file Rust
+just wrote does not.
 
 ### Abandoned
 
@@ -561,8 +604,8 @@ what caught every gap in fluessig, and it is the cheapest insurance jedem can bu
 test, and it is a harder one than the design's previous name asked for: not *is
 the translation faithful?* but **does every language actually get it?**
 
-That is the better question, because it is countable. Three things in the design
-are failures of it, and the doc already tracks all three:
+That is the better question, because it is countable. The design meets it in
+two places, fails it in three, and bans a fourth failure outright:
 
 **Where every language does get it:**
 
@@ -583,11 +626,6 @@ are failures of it, and the doc already tracks all three:
   for a handle mint (§5). Not a poor rendering — an absence. Under this name that
   is the single worst thing in the design, and §7 steps 3 and 6 exist to shrink
   it.
-- **The `Json` carrier** hands a language a degraded version: the value crosses,
-  the typed methods vanish. **Banned by construction** (§3): no `Json` type in
-  the vocabulary, no envelope projection, unlowerable types are compile errors.
-  It appears in this list only because the ban must be *kept* — the pressure to
-  add "just pass it as JSON for now" will recur, and §3 is the standing answer.
 - **`@manual`** means that language got a hand-written binding instead of a given
   one. It earns its keep as an escape hatch, and every use is still one place the
   promise was not kept.
@@ -595,6 +633,11 @@ are failures of it, and the doc already tracks all three:
   the signature is identical but means something weaker, because the runtime
   genuinely differs. Handled correctly — a loud marker, not a silent lie — but the
   name is not fully satisfied there and never will be.
+- **The `Json` carrier** (the banned fourth) hands a language a degraded version: the value crosses,
+  the typed methods vanish. **Banned by construction** (§3): no `Json` type in
+  the vocabulary, no envelope projection, unlowerable types are compile errors.
+  It appears in this list only because the ban must be *kept* — the pressure to
+  add "just pass it as JSON for now" will recur, and §3 is the standing answer.
 
 **And the honest one, at v1.** The v1 boundary (§1) ships to **two** languages.
 "To each" is an aspiration the first release deliberately does not meet. That is
@@ -615,8 +658,9 @@ each backend's emitted output; there is no surface document, per §3.)
 
 1. **Repo and name — `PowderworksCode/jedem`, a new repo.** Not a fluessig
    rename. Consequence: pidgin's existing `#[fluessig(...)]` attributes need a
-   rename pass to `#[jedem(...)]` when it migrates, and `<Iface>Core` /
-   `cargo fluessig emit` / `fluessig-gen` all get renamed spellings.
+   rename pass to `#[jedem(...)]` when it migrates; `<Iface>Core` gets a renamed
+   spelling; and fluessig's two-step `emit` / `fluessig-gen` CLI is not renamed
+   but **replaced** by the one-step `cargo jedem generate` (§3).
 2. **.NET binding technology — not prescribed.** Whichever Rust→C# bindgen
    actually works, chosen on contact (§1). This is deliberately a §7-step-6
    decision, not a design-time one; no research is owed before then.

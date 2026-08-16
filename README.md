@@ -15,8 +15,10 @@ descriptors the macros produced and writes the bindings. No intermediate file, n
 interchange format. Direction is Rust → others, one way.
 
 It is the successor to [fluessig][], narrowed from "describe a typed entity graph
-once, project it everywhere" down to functions alone. DDL, ORM models, format
-codecs and the Arrow data plane are out of scope permanently.
+once, project it everywhere" down to functions alone. Two in-house consumers
+drive it: **pidgin** (~157 hand-written binding symbols that are almost entirely
+generatable) and **jawohl 2.0** (a streaming parser that must feel native in
+Python, TypeScript and .NET).
 
 ## Design docs
 
