@@ -26,6 +26,7 @@ Python, TypeScript and .NET).
 |---|---|
 | [jedem design](./docs/jedem-design.md) | Scope, the hard three (callbacks / handles / streams), what's dropped, reuse, and the first end-to-end milestone |
 | [jawohl 2.0 design](./docs/jawohl-2.0-design.md) | jedem's first consumer — a cross-language incremental parser and validator for streaming structured data |
+| [decision record](./docs/decisions.md) | How the design got this way: each decision with its rationale and the alternatives that were killed |
 | [fluessig reading notes](./docs/fluessig-reading-notes.md) | The evidence base: what fluessig already solved, what carries over, and the restart-vs-narrow analysis |
 
 Read them in that order. The design docs mark their confidence inline —

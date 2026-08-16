@@ -275,14 +275,14 @@ correct handlers):
 4. `DocumentCompleted` is last, and is emitted exactly once.
 
 **Events cross the FFI typed.** The event enum is a structured discriminated
-union in every language — jedem's only union projection (jedem design §3); there
+union in every language — jedem's only union projection (jedem design §3, decision D4); there
 is no JSON-envelope mode to fall back to. A consumer never parses a string to
 learn what happened.
 
 **Errors are events, not exceptions.** `ValidationFailed` is a domain outcome —
 the consumer is *supposed* to keep receiving events and decide whether to cancel.
 This maps onto jedem's per-op stream error model, with jawohl setting it to
-errors-as-events rather than the throwing default (jedem §2.3). Only *parser*
+errors-as-events rather than the throwing default (jedem design §5.3). Only *parser*
 failure — malformed input, or a §4.2 profile violation — terminates the stream.
 
 ---
@@ -301,7 +301,7 @@ value would be both wrong and expensive.
 
 This is exactly jedem's **value-returning, fallible callback** — the feature
 fluessig explicitly rejects [verified, `fluessig/src/api.rs:585`] and jedem
-adds (jedem §2.1). It is safe here for the reason jedem's rule requires:
+adds (jedem decision D7). It is safe here for the reason jedem's rule requires:
 `push()` is synchronous and host-called, so the callback fires re-entrantly on
 the host's own thread, inside that call. **jawohl must not offer a native
 validator on an async or streaming op**, or it forfeits the guarantee.
@@ -457,7 +457,7 @@ is available if the schedule bites.
    [verified]. The owner is doing a **transfer**, not a fork, and is handling it
    directly. Nothing in this design touches `genauai/jawohl`.
 8. **Only `complete_json` fits jedem's v1 boundary.** jedem v1 is functions
-   over plain values — no callbacks, handles, or streams (jedem design §1). Of
+   over plain values — no callbacks, handles, or streams (jedem design §7). Of
    jawohl's surface only Level 1 qualifies; `Stream` is a handle mint, `changes()`
    is a stream, native validators are callbacks. With jawohl a full jedem
    consumer from day one, §8's surface track is therefore gated end to end on
