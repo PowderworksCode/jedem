@@ -1,32 +1,43 @@
-# calquer
+# jedem
 
 > Expose a Rust function once; call it from every language, with its shape intact.
 
-A **calque** is a loan translation — a phrase borrowed by translating its parts
-structurally rather than transliterating it. That is what this project does to a
-function signature: the shape is preserved, each part is rendered natively.
+**jedem** is German for *to each* — the dative of *jeder*, "every". One Rust
+function, handed to each language in its own idiom.
+
+Home: **jedem.dev**
 
 **Status: design only. There is no code yet.**
 
-calquer takes ordinary Rust and projects its **functions** into other languages.
-The user annotates a normal crate; calquer emits a surface description and
-generates per-language bindings from it. Direction is Rust → others, one way.
+jedem takes ordinary Rust and projects its **functions** into other languages.
+The user annotates a normal crate and runs one command; jedem reads the
+descriptors the macros produced and writes the bindings. No intermediate file, no
+interchange format. Direction is Rust → others, one way.
 
 It is the successor to [fluessig][], narrowed from "describe a typed entity graph
-once, project it everywhere" down to functions alone. DDL, ORM models, format
-codecs and the Arrow data plane are out of scope permanently.
+once, project it everywhere" down to functions alone. Two in-house consumers
+drive it: **pidgin** (~157 hand-written binding symbols that are almost entirely
+generatable) and **jawohl 2.0** (a streaming parser that must feel native in
+Python, TypeScript and .NET).
 
-## Design docs
+## The design
 
-| Doc | What it covers |
-|---|---|
-| [calquer design](./docs/calquer-design.md) | Scope, the hard three (callbacks / handles / streams), what's dropped, reuse, and the first end-to-end milestone |
-| [jawohl 2.0 design](./docs/jawohl-2.0-design.md) | calquer's first consumer — a cross-language incremental parser and validator for streaming structured data |
-| [fluessig reading notes](./docs/fluessig-reading-notes.md) | The evidence base: what fluessig already solved, what carries over, and the restart-vs-narrow analysis |
+One doc: **[DESIGN.md](./DESIGN.md)** — what jedem is and why, the model, the
+type system, ops, the three hard problems, backends, v1 and the roadmap.
+Confidence is marked inline: **[verified]** for claims run or read directly,
+**[speculation]** for unproven reasoning.
 
-Read them in that order. The design docs mark their confidence inline —
-**[verified]** for claims run or read directly, **[speculation]** for unproven
-reasoning.
+## Scope: the simple things first
+
+**v1 is a function that takes and returns plain values.** Free functions and
+methods; records, enums, unions and scalars as parameters and returns; sync by
+default with an async opt-out; fallible or infallible. Two targets: node/TS and
+python.
+
+If it needs a callback, a handle to a stateful object, or a stream, it is not v1.
+All three are designed — see below — but none gates the first release. DDL, ORM
+models, format codecs, the Arrow data plane and MCP generation are out
+permanently.
 
 ## The three hard problems
 
@@ -35,7 +46,7 @@ notes are the evidence base for all three:
 
 - **Callbacks** — the host supplies a closure. The Rust core sees one uniform
   shape regardless of source language; each backend wraps its native callable at
-  the FFI boundary. calquer widens this to value-returning, fallible callbacks,
+  the FFI boundary. jedem widens this to value-returning, fallible callbacks,
   restricted to synchronous ops.
 - **Handles** — an op returns a live, method-bearing object. The core returns the
   core object; the binding wraps it into the generated class.
