@@ -20,18 +20,12 @@ drive it: **pidgin** (~157 hand-written binding symbols that are almost entirely
 generatable) and **jawohl 2.0** (a streaming parser that must feel native in
 Python, TypeScript and .NET).
 
-## Design docs
+## The design
 
-| Doc | What it covers |
-|---|---|
-| [jedem design](./docs/jedem-design.md) | Scope, the hard three (callbacks / handles / streams), what's dropped, reuse, and the first end-to-end milestone |
-| [jawohl 2.0 design](./docs/jawohl-2.0-design.md) | jedem's first consumer — a cross-language incremental parser and validator for streaming structured data |
-| [decision record](./docs/decisions.md) | How the design got this way: each decision with its rationale and the alternatives that were killed |
-| [fluessig reading notes](./docs/fluessig-reading-notes.md) | The evidence base: what fluessig already solved, what carries over, and the restart-vs-narrow analysis |
-
-Read them in that order. The design docs mark their confidence inline —
-**[verified]** for claims run or read directly, **[speculation]** for unproven
-reasoning.
+One doc: **[DESIGN.md](./DESIGN.md)** — what jedem is and why, the model, the
+type system, ops, the three hard problems, backends, v1 and the roadmap.
+Confidence is marked inline: **[verified]** for claims run or read directly,
+**[speculation]** for unproven reasoning.
 
 ## Scope: the simple things first
 

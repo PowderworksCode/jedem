@@ -2,11 +2,7 @@
 
 > Expose a Rust function once; call it from every language, with its shape intact.
 
-**Status:** design; no code yet. This document states the design as it stands.
-The reasoning behind each decision — including the alternatives that were
-considered and killed — lives in the [decision record](./decisions.md); the
-evidence base mined from fluessig lives in the
-[reading notes](./fluessig-reading-notes.md).
+**Status:** design; no code yet. This is the design doc — the whole of it.
 
 Confidence marks: **[verified]** = run or read directly during the design
 sessions; **[speculation]** = unproven reasoning, with its failure condition
@@ -41,8 +37,7 @@ and the implementation. jedem never imports a foreign surface into Rust, never
 generates Rust from a `.d.ts`, and has no IDL.
 
 **Scope: functions.** DDL, ORM models, format codecs, the Arrow data plane and
-MCP generation are out of scope permanently ([D2](./decisions.md#d2)). jedem
-does one job.
+MCP generation are out of scope permanently. jedem does one job.
 
 ---
 
@@ -87,7 +82,7 @@ cargo jedem generate --python    # -> the pyo3 binding
 
 **jedem serializes nothing.** There is no interchange document, no
 `surface.json`, no schema to version, no loader re-validating a file Rust just
-wrote ([D3](./decisions.md#d3)). The pipeline is derive → descriptor →
+wrote. The pipeline is derive → descriptor →
 generator → bindings, all in one process. Drift between declaration and
 implementation is structurally impossible because the exported `impl` *is* the
 implementation. Two auxiliary needs the document used to serve are met
@@ -99,8 +94,7 @@ interface anyone may generate from.
 **The front end is rustc.** Every type in an exported signature is a real Rust
 type the compiler already resolved. A typo is a rustc error with
 rust-analyzer completion; "unrecognised type" is not a reachable state. The
-macros are built on `syn` + `darling`, with no reflection substrate
-([D8](./decisions.md#d8)).
+macros are built on `syn` + `darling`, with no reflection substrate.
 
 ---
 
@@ -114,7 +108,7 @@ Everything that can appear in an exported signature:
 | **Semantic scalars** | newtypes: `struct Oid(Vec<u8>)` | as their carrier, typed in docs |
 | **Records** | `#[derive(Record)]` plain structs | native objects/dataclasses |
 | **Enums** | `#[derive(Enum)]` | native enums; wire values pinnable |
-| **Unions** | `#[derive(Union)]` on a Rust enum | **structured discriminated unions, always** — napi `Either{N}` over tagged structs, Python tagged classes. There is no envelope mode ([D4](./decisions.md#d4)). |
+| **Unions** | `#[derive(Union)]` on a Rust enum | **structured discriminated unions, always** — napi `Either{N}` over tagged structs, Python tagged classes. There is no envelope mode. |
 | **Nullability** | `Option<T>` | `T \| null` / `Optional[T]`; param optionality is preserved |
 | **Handles** | an exported interface, by reference | a generated class holding the core (§5.2) |
 | **Callbacks** | closure params | the host's native callable (§5.1) |
@@ -129,7 +123,7 @@ derived set.
 **There is no `Json` carrier.** No type in the vocabulary degrades to a JSON
 string; a type jedem cannot lower is a **spanned compile error** at the derive,
 never a stringly fallback. A value crossing the FFI is typed, or the binding
-does not exist ([D4](./decisions.md#d4)). The one opaque crossing is
+does not exist. The one opaque crossing is
 **`Foreign`** — for genuinely external host types (`http.Server`, a
 `ChildProcess`) — and it is *declared* by the author at the signature, never
 reached for by the generator. Whether `Foreign` survives v1 is open (§9).
@@ -138,8 +132,7 @@ reached for by the generator. Whether `Foreign` survives v1 is open (§9).
 
 ## 4. Ops: kinds and projections
 
-An op is described by exactly two things ([D2](./decisions.md#d2) deleted the
-third axis):
+An op is described by exactly two things:
 
 **Kind** — what the op *is*:
 
@@ -157,8 +150,7 @@ Ctor | Method | Factory | Stream | Subscription | Manual
 
 **Projection** — how it *crosses*:
 
-- **Synchronous by default; `#[jedem(async)]` is the per-op opt-out**
-  ([D6](./decisions.md#d6)). Async-ness is declared in exactly one place and
+- **Synchronous by default; `#[jedem(async)]` is the per-op opt-out**. Async-ness is declared in exactly one place and
   means the same thing on every backend. There is no surface-level default.
 - **Infallibility is inferred** from the return type: `T` emits a no-throw
   binding all the way through the shared core trait; `Result<T, E>` keeps the
@@ -182,7 +174,7 @@ stand-in.
 
 Exposing a function stops being simple at exactly three places. fluessig's
 notes are the evidence base for all three; jedem inherits the solved parts and
-changes two things ([D5](./decisions.md#d5), [D7](./decisions.md#d7)).
+changes two things.
 
 ### 5.1 Callbacks
 
@@ -201,8 +193,8 @@ closure came from. (.NET: expected to be a pinned delegate + `GCHandle`
 [speculation — no fluessig precedent].)
 
 **Callbacks may return values and fail** — jawohl's native validators require
-it ([D7](./decisions.md#d7)) — under one rule that makes it safe everywhere,
-including PHP's single-threaded runtime:
+it — under one rule that makes it safe everywhere, including PHP's
+single-threaded runtime:
 
 > **A value-returning or fallible callback may appear only on a synchronous
 > op.** It is invoked re-entrantly, on the host thread, inside that call. On an
@@ -271,7 +263,7 @@ Tiered by actual consumer demand, not ambition:
 | Tier | Targets | Why |
 |---|---|---|
 | 1 | **node/TS, python** | Both consumers need both. Everything ships here first. |
-| 2 | **.NET** | jawohl target #4. New — no fluessig precedent. Technology unprescribed: whichever Rust→C# bindgen works, chosen on contact ([D10](./decisions.md#d10)). |
+| 2 | **.NET** | jawohl target #4. New — no fluessig precedent. Technology unprescribed: whichever Rust→C# bindgen works, chosen on contact. |
 | 3 | php, ruby | pidgin needs them. |
 | 4 | wasm, cpp, java | fluessig has them; no consumer is asking. Carried, not driven. |
 
@@ -292,7 +284,7 @@ State of the hard three today:
 
 What does **not** carry over from those lines: every degrade path. The envelope
 union projection, the unrecognised-scalar → `String` fallback, and the bare
-`Json` cross-package carrier are deleted in the port ([D4](./decisions.md#d4));
+`Json` cross-package carrier are deleted in the port;
 java's union crossing (envelope strings today) becomes a skip-note until
 structured lowering is built there. The typed lowering carries; the fallbacks
 do not.
@@ -364,8 +356,8 @@ consumer rather than a demo. Before the IR freezes, **author jawohl 2.0's and
 pidgin's complete surfaces against it** — surface-first authoring is what
 caught every gap in fluessig, and it is the cheapest insurance available.
 
-**The standing tension** ([D9](./decisions.md#d9)): jawohl is a full jedem
-consumer from day one, and nothing useful in jawohl fits inside the v1
+**The standing tension:** jawohl is a full jedem consumer from day one — it
+writes no bindings by hand — and nothing useful in jawohl fits inside the v1
 boundary — only `complete_json` is v1-shaped. jawohl's useful surface waits for
 steps 3–5; its Rust core (the majority of its engineering) is not blocked and
 absorbs the wait.
