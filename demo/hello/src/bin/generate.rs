@@ -8,9 +8,14 @@
 //!     cargo run -p hello --bin generate
 
 fn main() -> std::io::Result<()> {
-    let out = concat!(env!("CARGO_MANIFEST_DIR"), "/../hello-py/src/generated.rs");
-    let code = jedem::generate(hello::JEDEM_SURFACE, jedem::Target::Python, "hello");
-    std::fs::write(out, &code)?;
-    println!("wrote {} ({} bytes)", out, code.len());
+    for (target, out) in [
+        (jedem::Target::Python, "hello-py"),
+        (jedem::Target::Node, "hello-node"),
+    ] {
+        let path = format!("{}/../{}/src/generated.rs", env!("CARGO_MANIFEST_DIR"), out);
+        let code = jedem::generate(hello::JEDEM_SURFACE, target, "hello");
+        std::fs::write(&path, &code)?;
+        println!("wrote {} ({} bytes)", path, code.len());
+    }
     Ok(())
 }

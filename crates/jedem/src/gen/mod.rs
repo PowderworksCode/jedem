@@ -5,6 +5,7 @@
 //! point is that each language gets what *it* would have written, so the
 //! per-language differences are the product rather than an inconvenience.
 
+mod node;
 mod python;
 
 use crate::descriptor::Surface;
@@ -15,13 +16,21 @@ use crate::descriptor::Surface;
 pub enum Target {
     /// A pyo3 extension module.
     Python,
+    /// A napi-rs native addon, consumed from TypeScript or JavaScript.
+    Node,
 }
 
 impl Target {
+    /// Every target jedem can generate for.
+    ///
+    /// Exposed so callers — and jedem's own drift guard — can assert they have
+    /// covered all of them, rather than silently missing one added later.
+    pub const ALL: &'static [Target] = &[Target::Python, Target::Node];
+
     /// The conventional file name for this target's output.
     pub fn default_file_name(self) -> &'static str {
         match self {
-            Target::Python => "generated.rs",
+            Target::Python | Target::Node => "generated.rs",
         }
     }
 }
@@ -36,9 +45,34 @@ impl Target {
 /// the crate's name when it is a separate binding crate (the usual shape — a
 /// `foo` crate and a `foo-py` beside it).
 pub fn generate(surface: &Surface, target: Target, core_path: &str) -> String {
-    match target {
+    let body = match target {
         Target::Python => python::generate(surface, core_path),
+        Target::Node => node::generate(surface, core_path),
+    };
+    // Exactly one terminal newline, for every backend. Generated files are
+    // committed and diffed against a fresh generation, so if `cargo fmt`
+    // rewrites the tail then every `cargo fmt` breaks the build -- and each
+    // backend getting this right independently is a bug waiting to recur.
+    let mut out = body.trim_end().to_string();
+    out.push('\n');
+    out
+}
+
+/// `snake_case` -> `camelCase`, for the languages that spell names that way.
+pub(crate) fn lower_camel(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut upper_next = false;
+    for c in s.chars() {
+        if c == '_' {
+            upper_next = true;
+        } else if upper_next {
+            out.extend(c.to_uppercase());
+            upper_next = false;
+        } else {
+            out.push(c);
+        }
     }
+    out
 }
 
 /// The banner every generated file carries.
@@ -62,6 +96,7 @@ pub(crate) mod tests_support {
         params: &[Param {
             name: "name",
             ty: Type::Str,
+            borrowed: true,
         }],
         returns: Type::Str,
         fallible: false,
@@ -88,10 +123,6 @@ pub(crate) mod tests_support {
         version: "9.9.9",
         interfaces: &[&IFACE],
     };
-
-    pub fn python_output() -> String {
-        super::generate(&SURFACE, super::Target::Python, "mycore")
-    }
 }
 
 #[cfg(test)]
@@ -106,6 +137,7 @@ mod tests {
         params: &[Param {
             name: "name",
             ty: Type::Str,
+            borrowed: true,
         }],
         returns: Type::Str,
         fallible: false,
@@ -201,36 +233,104 @@ mod tests {
 
 #[cfg(test)]
 mod format_stability {
-    use super::tests_support::*;
+    use super::tests_support::SURFACE;
+    use super::{generate, Target};
 
-    /// Generated code must survive `cargo fmt` untouched.
+    /// Generated code must survive `cargo fmt` untouched, for **every**
+    /// backend.
     ///
-    /// It is committed, and a drift guard compares it against a fresh
-    /// generation — so if the formatter rewrites it, every `cargo fmt` breaks
-    /// the build. Trailing whitespace is the way this goes wrong in practice:
-    /// an empty doc line emitted as `/// ` rather than `///`.
-    #[test]
-    fn no_generated_line_has_trailing_whitespace() {
-        let out = python_output();
-        for (i, line) in out.lines().enumerate() {
-            assert_eq!(
-                line.trim_end(),
-                line,
-                "line {} has trailing whitespace: {line:?}",
-                i + 1
-            );
+    /// It is committed and diffed against a fresh generation, so a formatter
+    /// that rewrites it breaks every build. This has already happened twice:
+    /// a trailing space on an empty doc line, and a trailing blank line at end
+    /// of file. Checking each backend separately is how the second one got
+    /// through, so the check iterates `Target::ALL`.
+    fn each_target(check: impl Fn(Target, &str)) {
+        for &t in Target::ALL {
+            check(t, &generate(&SURFACE, t, "mycore"));
         }
     }
 
     #[test]
-    fn output_ends_with_exactly_one_newline() {
-        let out = python_output();
-        assert!(out.ends_with('\n'));
-        assert!(!out.ends_with("\n\n"));
+    fn no_trailing_whitespace() {
+        each_target(|t, out| {
+            for (i, line) in out.lines().enumerate() {
+                assert_eq!(
+                    line.trim_end(),
+                    line,
+                    "{t:?} line {} has trailing whitespace: {line:?}",
+                    i + 1
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn ends_with_exactly_one_newline() {
+        each_target(|t, out| {
+            assert!(out.ends_with('\n'), "{t:?} must end with a newline");
+            assert!(
+                !out.ends_with("\n\n"),
+                "{t:?} must not end with a blank line"
+            );
+        });
     }
 
     #[test]
     fn no_tabs() {
-        assert!(!python_output().contains('\t'));
+        each_target(|t, out| assert!(!out.contains('\t'), "{t:?} contains a tab"));
+    }
+}
+
+#[cfg(test)]
+mod node_tests {
+    use super::tests_support::SURFACE;
+    use super::{generate, Target};
+
+    fn node() -> String {
+        generate(&SURFACE, Target::Node, "mycore")
+    }
+
+    #[test]
+    fn names_are_camel_case_in_js_and_snake_case_in_rust() {
+        let out = node();
+        // The Rust fn keeps its own name; only the exported spelling changes.
+        assert!(out.contains("pub fn greet("), "{out}");
+        assert!(out.contains(r#"#[napi(js_name = "greet")]"#));
+    }
+
+    #[test]
+    fn a_pinned_name_wins_over_camel_casing() {
+        assert!(node().contains(r#"#[napi(js_name = "checked_alias")]"#));
+    }
+
+    #[test]
+    fn napi_takes_owned_strings_and_the_call_re_borrows() {
+        let out = node();
+        // The core wants `&str`; napi hands over `String`.
+        assert!(out.contains("pub fn greet(name: String)"), "{out}");
+        assert!(out.contains("mycore::Hello::greet(&name)"), "{out}");
+    }
+
+    #[test]
+    fn a_synchronous_function_stays_synchronous() {
+        let out = node();
+        assert!(!out.contains("AsyncTask"), "no promise machinery");
+        assert!(!out.contains("Promise"));
+    }
+
+    #[test]
+    fn a_fallible_op_throws() {
+        assert!(node().contains("-> napi::Result<()>"));
+    }
+}
+
+#[cfg(test)]
+mod camel {
+    #[test]
+    fn cases() {
+        assert_eq!(super::lower_camel("complete_json"), "completeJson");
+        assert_eq!(super::lower_camel("reverse_bytes"), "reverseBytes");
+        assert_eq!(super::lower_camel("greet"), "greet");
+        assert_eq!(super::lower_camel("a_b_c"), "aBC");
     }
 }

@@ -91,7 +91,8 @@ fn expand_export(input: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
                 }
             };
             let ty = lower_type(&pt.ty)?;
-            params.push((pname, ty));
+            let borrowed = matches!(&*pt.ty, Type::Reference(_));
+            params.push((pname, ty, borrowed));
         }
 
         let (returns, fallible) = match &f.sig.output {
@@ -105,8 +106,8 @@ fn expand_export(input: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
         let rust_path = format!("{type_name}::{name}");
         let doc_tok = opt_str(doc.as_deref());
         let export_tok = opt_str(export_name.as_deref());
-        let param_toks = params.iter().map(|(n, t)| {
-            quote! { ::jedem::Param { name: #n, ty: #t } }
+        let param_toks = params.iter().map(|(n, t, b)| {
+            quote! { ::jedem::Param { name: #n, ty: #t, borrowed: #b } }
         });
 
         ops.push(quote! {

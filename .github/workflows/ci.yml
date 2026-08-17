@@ -19,8 +19,8 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all
 
-  # The end-to-end proof: a real Python process importing generated bindings
-  # and calling them. A backend without one of these does not count as done.
+  # The end-to-end proofs: a real host process importing generated bindings and
+  # calling them. A backend without one of these does not count as done.
   python-roundtrip:
     runs-on: ubuntu-latest
     steps:
@@ -30,3 +30,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: ./demo/hello-py/run.sh
+
+  node-roundtrip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: ./demo/hello-node/run.sh

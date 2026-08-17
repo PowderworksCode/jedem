@@ -31,8 +31,10 @@ impl Hello {
 
     /// Greet someone, refusing an empty name.
     ///
-    /// Fallible: the `Result` becomes a raised exception in Python, not an
-    /// error value the caller has to remember to check.
+    /// Fallible: the `Result` becomes whatever that language uses for failure
+    /// -- a raised exception, a thrown error -- not an error value the caller
+    /// has to remember to check. A doc comment is written once and read in
+    /// every binding, so it should not name one language.
     pub fn greet_checked(name: &str) -> Result<String, EmptyName> {
         if name.is_empty() {
             return Err(EmptyName);

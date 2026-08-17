@@ -1,0 +1,157 @@
+//! The TypeScript backend: a [napi-rs](https://napi.rs) native addon.
+//!
+//! What a JavaScript developer would have written. Three things follow from
+//! that, and none of them is cosmetic:
+//!
+//! **Names are `camelCase`.** `reverse_bytes` is `reverseBytes` in JS, because
+//! that is the name a JS caller expects to type. The Rust function keeps its
+//! own name; only the exported spelling changes.
+//!
+//! **A synchronous function stays synchronous.** No `Promise`, no `AsyncTask`.
+//! Wrapping every call in a promise because the machinery exists would be an
+//! accent, not a translation — the caller writes `greet(name)`, not
+//! `await greet(name)`.
+//!
+//! **Bytes are position-aware.** A `bytes` *parameter* is a `Uint8Array` — a
+//! read-only view the caller already holds — while a `bytes` *return* is a
+//! `Buffer`, an owned buffer JS can keep. `Buffer extends Uint8Array`, so the
+//! distinction costs nothing at runtime, but the printed `.d.ts` differs and
+//! the owned/borrowed intent is exactly what a hand-written binding would
+//! express.
+
+use crate::descriptor::{Op, Param, Surface, Type};
+
+pub(super) fn generate(surface: &Surface, core_path: &str) -> String {
+    let mut out = String::new();
+    out.push_str(&super::banner(surface, "node"));
+    out.push_str(
+        r#"
+#![allow(clippy::all)]
+#![allow(unused_imports)]
+// napi registers each function at module load, so nothing in this crate
+// references them by name and rustc cannot tell they are used.
+#![allow(dead_code)]
+
+use napi_derive::napi;
+
+/// A core error surfaces as a thrown JS `Error` carrying its `Display` text --
+/// the idiomatic seam, rather than an error value the caller has to remember
+/// to inspect.
+fn err(e: impl std::fmt::Display) -> napi::Error {
+    napi::Error::from_reason(e.to_string())
+}
+"#,
+    );
+
+    for iface in surface.interfaces {
+        out.push_str(&format!("\n// ---- {} ----\n\n", iface.name));
+        for op in iface.ops {
+            out.push_str(&op_fn(op, core_path));
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// The exported JS spelling: a pinned name verbatim, otherwise the Rust name
+/// in `camelCase`.
+fn js_name(op: &Op) -> String {
+    match op.export_name {
+        Some(pinned) => pinned.to_string(),
+        None => super::lower_camel(op.name),
+    }
+}
+
+fn op_fn(op: &Op, core_path: &str) -> String {
+    let mut s = String::new();
+    if let Some(doc) = op.doc {
+        for line in doc.lines() {
+            if line.is_empty() {
+                s.push_str("///\n");
+            } else {
+                s.push_str(&format!("/// {line}\n"));
+            }
+        }
+    }
+
+    // Always explicit, even when it matches napi's own default casing:
+    // generated code should let a reviewer read the JS name without knowing
+    // the generator's conventions.
+    s.push_str(&format!("#[napi(js_name = \"{}\")]\n", js_name(op)));
+
+    let params: Vec<String> = op
+        .params
+        .iter()
+        .map(|p| format!("{}: {}", p.name, param_ty(p)))
+        .collect();
+
+    s.push_str(&format!(
+        "pub fn {}({}) -> {} {{\n",
+        op.name,
+        params.join(", "),
+        return_ty(op)
+    ));
+
+    let args: Vec<String> = op.params.iter().map(arg_expr).collect();
+    let call = format!("{}::{}({})", core_path, op.rust_path, args.join(", "));
+
+    // A `Vec<u8>` from the core becomes an owned `Buffer` on the way out; for
+    // a fallible op the conversion applies to the payload, not the `Result`.
+    s.push_str(&match (op.fallible, op.returns) {
+        (true, Type::Unit) => format!("    {call}.map_err(err)?;\n    Ok(())\n"),
+        (true, Type::Bytes) => format!("    {call}.map(Into::into).map_err(err)\n"),
+        (true, _) => format!("    {call}.map_err(err)\n"),
+        (false, Type::Unit) => format!("    {call};\n"),
+        (false, Type::Bytes) => format!("    {call}.into()\n"),
+        (false, _) => format!("    {call}\n"),
+    });
+    s.push_str("}\n");
+    s
+}
+
+/// How the parameter is spelled in the generated napi signature.
+///
+/// napi hands over owned values, so a core that wants `&str` gets a `String`
+/// here and is re-borrowed at the call site — see [`arg_expr`].
+fn param_ty(p: &Param) -> String {
+    match p.ty {
+        Type::Bytes => "napi::bindgen_prelude::Uint8Array".into(),
+        Type::Str => "String".into(),
+        other => owned_ty(&other),
+    }
+}
+
+/// How the parameter is passed on to the core.
+fn arg_expr(p: &Param) -> String {
+    match (p.ty, p.borrowed) {
+        // `Uint8Array` derefs to `[u8]`, so a borrow reaches a `&[u8]` core.
+        (Type::Str, true) | (Type::Bytes, true) => format!("&{}", p.name),
+        _ => p.name.to_string(),
+    }
+}
+
+fn owned_ty(t: &Type) -> String {
+    match t {
+        Type::Unit => "()".into(),
+        Type::Bool => "bool".into(),
+        Type::I32 => "i32".into(),
+        // napi maps `i64` to a JS `number`, which loses precision beyond
+        // 2^53. Faithful for the range JS itself can represent.
+        Type::I64 => "i64".into(),
+        Type::F64 => "f64".into(),
+        Type::Str => "String".into(),
+        // Owned position: a JS caller receives a Buffer it can hold.
+        Type::Bytes => "napi::bindgen_prelude::Buffer".into(),
+        Type::Optional(inner) => format!("Option<{}>", owned_ty(inner)),
+        Type::List(inner) => format!("Vec<{}>", owned_ty(inner)),
+    }
+}
+
+fn return_ty(op: &Op) -> String {
+    let inner = owned_ty(&op.returns);
+    if op.fallible {
+        format!("napi::Result<{inner}>")
+    } else {
+        inner
+    }
+}
