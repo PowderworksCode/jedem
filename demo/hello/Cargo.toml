@@ -1,0 +1,10 @@
+[package]
+name = "hello"
+description = "The jedem demo surface: ordinary Rust, annotated. No FFI here."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+jedem = { workspace = true }

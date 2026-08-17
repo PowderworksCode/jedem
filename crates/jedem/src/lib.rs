@@ -1,0 +1,68 @@
+//! # jedem
+//!
+//! Expose a Rust function once; call it from every language, with its shape
+//! intact.
+//!
+//! *jedem* is German for **to each** — one Rust function, handed to each
+//! language in its own idiom. A sync function stays sync, an error raises
+//! natively, a name reads the way that language would have spelled it.
+//!
+//! ## How it works
+//!
+//! Annotate an ordinary `impl` block and name it in a surface:
+//!
+//! ```
+//! pub struct Greeter;
+//!
+//! #[jedem::export]
+//! impl Greeter {
+//!     /// Greet someone by name.
+//!     pub fn greet(name: &str) -> String {
+//!         format!("Hello, {name}!")
+//!     }
+//! }
+//!
+//! jedem::surface! { name: "hello", version: "0.1.0", api: [Greeter] }
+//! ```
+//!
+//! The macros expand to the impl you wrote plus a `&'static` [`Surface`]
+//! describing it. A small bin target then hands that constant to
+//! [`generate`] and writes the bindings:
+//!
+//! ```no_run
+//! # const JEDEM_SURFACE: &jedem::Surface = &jedem::Surface {
+//! #     name: "hello", version: "0.1.0", interfaces: &[] };
+//! # fn main() -> std::io::Result<()> {
+//! let code = jedem::generate(JEDEM_SURFACE, jedem::Target::Python, "hello");
+//! std::fs::write("src/generated.rs", code)?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Nothing is serialised
+//!
+//! There is no interchange document, no schema to version, and no checked-in
+//! artefact that can go stale against the code it describes. The generator is
+//! a library, called on the descriptors directly, in one process.
+//!
+//! ## What v1 covers
+//!
+//! Functions that take and return **plain values**: `bool`, integers, `f64`,
+//! `String`/`&str`, `Vec<u8>`, `Option<T>`, `Vec<T>`; synchronous; fallible or
+//! not. Callbacks, handles to stateful objects, and streams are designed but
+//! not in v1 — see `DESIGN.md`.
+//!
+//! A type jedem cannot lower is a **compile error at the macro**, never an
+//! opaque blob smuggled across as a string.
+
+mod descriptor;
+mod gen;
+
+pub use descriptor::{Interface, Op, Param, Surface, Type};
+pub use gen::{generate, Target};
+
+/// Mark an `impl` block for export. See the [crate docs](crate).
+pub use jedem_macros::export;
+
+/// Declare a crate's surface. See the [crate docs](crate).
+pub use jedem_macros::surface;

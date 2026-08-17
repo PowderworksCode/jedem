@@ -7,7 +7,13 @@ function, handed to each language in its own idiom.
 
 Home: **jedem.dev**
 
-**Status: design only. There is no code yet.**
+**Status: the spine works end to end.** One Rust function, generated Python
+bindings, a real Python process calling them — see `demo/`. Four more languages
+and the richer type vocabulary follow.
+
+```sh
+./demo/hello-py/run.sh    # generate, build, and run Python against it
+```
 
 jedem takes ordinary Rust and projects its **functions** into other languages.
 The user annotates a normal crate and runs one command; jedem reads the
@@ -29,15 +35,18 @@ Confidence is marked inline: **[verified]** for claims run or read directly,
 
 ## Scope: the simple things first
 
-**v1 is a function that takes and returns plain values.** Free functions and
-methods; records, enums, unions and scalars as parameters and returns; sync by
-default with an async opt-out; fallible or infallible. Two targets: node/TS and
-python.
+**v1 is a function that takes and returns plain values** — `bool`, integers,
+`f64`, `String`/`&str`, `Vec<u8>`, `Option<T>`, `Vec<T>`; synchronous; fallible
+or not. Initial targets: **python, TypeScript, PHP, Java**, plus Rust, which
+needs nothing generated.
 
-If it needs a callback, a handle to a stateful object, or a stream, it is not v1.
-All three are designed — see below — but none gates the first release. DDL, ORM
-models, format codecs, the Arrow data plane and MCP generation are out
+If it needs a callback, a handle to a stateful object, or a stream, it is not
+v1. All three are designed — see below — but none gates the first release. DDL,
+ORM models, format codecs, the Arrow data plane and MCP generation are out
 permanently.
+
+There is no fallback for a type jedem cannot lower: it is a **compile error at
+the macro**, never an opaque blob smuggled across as a string.
 
 ## The three hard problems
 
