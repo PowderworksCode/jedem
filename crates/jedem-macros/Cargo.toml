@@ -1,0 +1,15 @@
+[package]
+name = "jedem-macros"
+description = "Proc macros for jedem. Use the `jedem` crate instead of depending on this directly."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"

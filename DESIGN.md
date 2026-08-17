@@ -262,10 +262,10 @@ Tiered by actual consumer demand, not ambition:
 
 | Tier | Targets | Why |
 |---|---|---|
-| 1 | **node/TS, python** | Both consumers need both. Everything ships here first. |
-| 2 | **.NET** | jawohl target #4. New — no fluessig precedent. Technology unprescribed: whichever Rust→C# bindgen works, chosen on contact. |
-| 3 | php, ruby | pidgin needs them. |
-| 4 | wasm, cpp, java | fluessig has them; no consumer is asking. Carried, not driven. |
+| 1 | **python, TypeScript** | Both consumers need both. Everything ships here first. |
+| 2 | **PHP, Java** | pidgin needs PHP; Java rounds out the initial set. |
+| — | **Rust** | Nominally a target, but there is no FFI boundary between Rust and Rust: a consumer depends on the crate directly. "Rust support" means the annotations are **inert**, which `demo/hello/tests/rust_still_works.rs` asserts. Nothing is generated. |
+| later | .NET, ruby, wasm, cpp | .NET is jawohl's fourth language and has no fluessig precedent; the rest are carried, not driven. |
 
 **The inherited asset** [verified]: fluessig's `src/api.rs` + `src/bindgen/**`
 — ~13,200 lines across seven backends, already independent of everything jedem
@@ -297,10 +297,12 @@ backend without one does not count as done.
 
 ## 7. v1 and the road
 
-**v1 is a function that takes and returns plain values.** Free functions and
-methods; records, enums, unions and semantic scalars as parameters and returns;
-synchronous by default with an async opt-out; fallible or infallible. Two
-targets: node/TS and python. If it needs a callback, a handle mint, or a
+**v1 is a function that takes and returns plain values.** Free functions;
+`bool`, integers, `f64`, `String`/`&str`, `Vec<u8>`, `Option<T>` and `Vec<T>`
+as parameters and returns; synchronous; fallible or infallible. Initial
+targets: python, TypeScript, PHP and Java — plus Rust, which needs nothing
+generated. Records, enums, unions and semantic scalars follow; async follows
+them. If it needs a callback, a handle mint, or a
 stream, it is not v1 — all three are designed (§5), none gates the first
 release.
 
