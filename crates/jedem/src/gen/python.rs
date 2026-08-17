@@ -65,7 +65,7 @@ fn op_fn(op: &Op, exported: &str, core_path: &str) -> String {
     let params: Vec<String> = op
         .params
         .iter()
-        .map(|p| format!("{}: {}", p.name, param_ty(&p.ty)))
+        .map(|p| format!("{}: {}", p.name, param_ty(&p.ty, p.borrowed)))
         .collect();
     let args: Vec<String> = op.params.iter().map(|p| p.name.to_string()).collect();
 
@@ -96,11 +96,11 @@ fn op_fn(op: &Op, exported: &str, core_path: &str) -> String {
 /// Bytes are position-aware: a parameter is a borrowed view (`&[u8]`), so
 /// Python's `bytes` crosses without a copy on our side, while a *return* is
 /// owned.
-fn param_ty(t: &Type) -> String {
-    match t {
-        Type::Str => "&str".into(),
-        Type::Bytes => "&[u8]".into(),
-        other => owned_ty(other),
+fn param_ty(t: &Type, borrowed: bool) -> String {
+    match (t, borrowed) {
+        (Type::Str, true) => "&str".into(),
+        (Type::Bytes, true) => "&[u8]".into(),
+        (other, _) => owned_ty(other),
     }
 }
 

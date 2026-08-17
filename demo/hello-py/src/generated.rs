@@ -26,8 +26,10 @@ pub fn greet(name: &str) -> String {
 
 /// Greet someone, refusing an empty name.
 ///
-/// Fallible: the `Result` becomes a raised exception in Python, not an
-/// error value the caller has to remember to check.
+/// Fallible: the `Result` becomes whatever that language uses for failure
+/// -- a raised exception, a thrown error -- not an error value the caller
+/// has to remember to check. A doc comment is written once and read in
+/// every binding, so it should not name one language.
 #[pyfunction]
 pub fn greet_checked(name: &str) -> PyResult<String> {
     hello::Hello::greet_checked(name).map_err(err)

@@ -55,6 +55,14 @@ pub struct Op {
 pub struct Param {
     pub name: &'static str,
     pub ty: Type,
+    /// True when the Rust parameter was a reference (`&str`, `&[u8]`).
+    ///
+    /// [`Type`] says what crosses the boundary; this says how the core wants
+    /// to receive it, and the two differ per language. pyo3 can take a
+    /// borrowed `&str` straight from the interpreter, while napi hands over an
+    /// owned `String` that the call site must re-borrow. Without this the
+    /// second backend generates code that does not compile.
+    pub borrowed: bool,
 }
 
 /// The v1 type vocabulary: plain values.
