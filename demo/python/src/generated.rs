@@ -68,6 +68,21 @@ pub fn shout(text: &str) -> String {
     hello::Hello::shout_it(text)
 }
 
+// ---- fallible ----
+
+/// Parse a number, then halve it. Two different failure types, one
+/// signature, no `map_err` in sight.
+#[pyfunction]
+pub fn halve_parsed(text: &str) -> PyResult<i64> {
+    hello::fallible::halve_parsed(text).map_err(err)
+}
+
+/// A plain concrete error still works, unchanged.
+#[pyfunction]
+pub fn checked(text: &str) -> PyResult<String> {
+    hello::fallible::checked(text).map_err(err)
+}
+
 /// Register everything on the module. Call this from your `#[pymodule]`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(greet, m)?)?;
@@ -77,5 +92,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(split, m)?)?;
     m.add_function(wrap_pyfunction!(reverse_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(shout, m)?)?;
+    m.add_function(wrap_pyfunction!(halve_parsed, m)?)?;
+    m.add_function(wrap_pyfunction!(checked, m)?)?;
     Ok(())
 }

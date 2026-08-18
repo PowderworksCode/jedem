@@ -68,3 +68,18 @@ pub fn reverse_bytes(data: napi::bindgen_prelude::Uint8Array) -> napi::bindgen_p
 pub fn shout_it(text: String) -> String {
     hello::Hello::shout_it(&text)
 }
+
+// ---- fallible ----
+
+/// Parse a number, then halve it. Two different failure types, one
+/// signature, no `map_err` in sight.
+#[napi(js_name = "halveParsed")]
+pub fn halve_parsed(text: String) -> napi::Result<i64> {
+    hello::fallible::halve_parsed(&text).map_err(err)
+}
+
+/// A plain concrete error still works, unchanged.
+#[napi(js_name = "checked")]
+pub fn checked(text: String) -> napi::Result<String> {
+    hello::fallible::checked(&text).map_err(err)
+}

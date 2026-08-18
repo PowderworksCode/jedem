@@ -65,11 +65,36 @@ pub fn generate(surface: &Surface, target: Target, core_path: &str) -> String {
         Target::Python => python::generate(surface, core_path),
         Target::Node => node::generate(surface, core_path),
     };
-    // Exactly one terminal newline, for every backend. Generated files are
-    // committed and diffed against a fresh generation, so if `cargo fmt`
-    // rewrites the tail then every `cargo fmt` breaks the build -- and each
-    // backend getting this right independently is a bug waiting to recur.
-    let mut out = body.trim_end().to_string();
+    normalise(&body)
+}
+
+/// Make generated output rustfmt-stable, centrally.
+///
+/// Generated files are committed and diffed against a fresh generation, so
+/// anything `cargo fmt` rewrites breaks every build that runs it. Each backend
+/// getting this right independently is a bug waiting to recur -- and it has
+/// recurred, three times: a trailing space on an empty doc line, a trailing
+/// blank line at end of file, and a double blank line between interfaces.
+///
+/// So the invariants live here rather than in any backend: no trailing
+/// whitespace, no run of blank lines, exactly one terminal newline.
+fn normalise(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut blank_run = 0usize;
+    for line in body.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            blank_run += 1;
+            if blank_run > 1 {
+                continue;
+            }
+        } else {
+            blank_run = 0;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    let mut out = out.trim_end().to_string();
     out.push('\n');
     out
 }
@@ -356,6 +381,32 @@ mod format_stability {
     #[test]
     fn no_tabs() {
         each_target(|t, out| assert!(!out.contains('\t'), "{t:?} contains a tab"));
+    }
+
+    /// rustfmt collapses consecutive blank lines, so emitting them means every
+    /// `cargo fmt` rewrites the file and breaks the drift guard. This is the
+    /// third distinct way that has happened; the check is now structural.
+    #[test]
+    fn no_run_of_blank_lines() {
+        each_target(|t, out| {
+            let mut blank = 0;
+            for (i, line) in out.lines().enumerate() {
+                blank = if line.trim().is_empty() { blank + 1 } else { 0 };
+                assert!(blank < 2, "{t:?} has consecutive blank lines at {}", i + 1);
+            }
+        });
+    }
+
+    /// The whole point: what jedem writes is what rustfmt would leave alone.
+    #[test]
+    fn output_is_already_normalised() {
+        each_target(|t, out| {
+            assert_eq!(
+                super::normalise(out),
+                out,
+                "{t:?} is not normalisation-stable"
+            )
+        });
     }
 }
 
