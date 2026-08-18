@@ -76,4 +76,34 @@ impl Hello {
     }
 }
 
-jedem::surface! { name: "hello", version: "0.1.0", api: [Hello] }
+jedem::surface! { name: "hello", version: "0.1.0", api: [Hello, fallible] }
+
+/// Errors that can come from more than one place.
+///
+/// Before `Box<dyn Error>` was accepted, a function that could fail two ways
+/// had to flatten to `Result<_, String>` and litter itself with
+/// `.map_err(|e| e.to_string())`. jedem never inspected the error type — every
+/// backend renders failure as that language's own mechanism carrying the
+/// error's `Display` text — so anything `Display` works.
+#[jedem::export]
+pub mod fallible {
+    use std::error::Error;
+
+    /// Parse a number, then halve it. Two different failure types, one
+    /// signature, no `map_err` in sight.
+    pub fn halve_parsed(text: &str) -> Result<i64, Box<dyn Error>> {
+        let n: i64 = text.parse()?;
+        if n % 2 != 0 {
+            return Err(format!("{n} is odd").into());
+        }
+        Ok(n / 2)
+    }
+
+    /// A plain concrete error still works, unchanged.
+    pub fn checked(text: &str) -> Result<String, super::EmptyName> {
+        if text.is_empty() {
+            return Err(super::EmptyName);
+        }
+        Ok(text.to_string())
+    }
+}

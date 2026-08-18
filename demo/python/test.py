@@ -78,3 +78,19 @@ if failures:
     print(f"\n{failures} failure(s)")
     sys.exit(1)
 print("\nall checks passed")
+
+print("Box<dyn Error>: two failure types, one signature")
+failures += check("halve_parsed ok", hello.halve_parsed("10"), 5)
+try:
+    hello.halve_parsed("9")
+    print("  FAIL odd should raise"); failures += 1
+except ValueError as e:
+    failures += check("odd raises", str(e), "9 is odd")
+try:
+    hello.halve_parsed("banana")
+    print("  FAIL unparseable should raise"); failures += 1
+except ValueError as e:
+    failures += check("parse error raises", "invalid digit" in str(e), True)
+
+if failures:
+    print(f"\n{failures} failure(s) in the Box<dyn Error> section"); sys.exit(1)

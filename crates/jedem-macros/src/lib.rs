@@ -412,6 +412,13 @@ fn export_name_of(attrs: &[syn::Attribute]) -> syn::Result<Option<String>> {
 
 /// `Result<T, E>` -> `T`. Matched by name because a proc macro sees tokens,
 /// not resolved types; an aliased `Result` is the known cost of that.
+///
+/// The error type is deliberately not inspected. Every backend renders failure
+/// as that language's own mechanism -- a raised exception, a thrown `Error` --
+/// carrying the error's `Display` text, so **anything that implements `Display`
+/// works**, including `Box<dyn Error>` and `anyhow::Error`. A `Result` with a
+/// single elided parameter (`Result<T>`, from a crate's own alias) is accepted
+/// too.
 fn unwrap_result(t: &Type) -> Option<&Type> {
     let Type::Path(p) = t else { return None };
     let seg = p.path.segments.last()?;
@@ -419,6 +426,7 @@ fn unwrap_result(t: &Type) -> Option<&Type> {
         return None;
     }
     let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        // `Result` with no parameters is not a result we can lower.
         return None;
     };
     args.args.first().and_then(|a| match a {

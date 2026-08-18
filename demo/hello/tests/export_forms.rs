@@ -103,3 +103,42 @@ fn all_three_forms_generate() {
     assert!(py.contains("core::arithmetic::add(a, b)"), "a mod does");
     assert!(py.contains("core::Hello::greet(name)"), "a type does");
 }
+
+/// Any error type works, because jedem never inspects one.
+///
+/// Every backend renders failure as that language's own mechanism -- a raised
+/// exception, a thrown `Error` -- carrying the error's `Display` text. So a
+/// function that can fail two ways needs no unifying error enum and no
+/// `.map_err(|e| e.to_string())`; `Box<dyn Error>` is enough.
+#[test]
+fn any_display_error_lowers_as_fallible() {
+    let ops = hello::fallible::JEDEM_INTERFACE.ops;
+    let by = |n: &str| ops.iter().find(|o| o.name == n).unwrap();
+
+    // Box<dyn Error> -- two failure types behind one signature.
+    let boxed = by("halve_parsed");
+    assert!(boxed.fallible);
+    assert_eq!(boxed.returns, jedem::Type::I64, "the Result is unwrapped");
+
+    // A concrete error type is unchanged.
+    let concrete = by("checked");
+    assert!(concrete.fallible);
+    assert_eq!(concrete.returns, jedem::Type::Str);
+}
+
+#[test]
+fn a_boxed_error_generates_the_same_seam_as_a_concrete_one() {
+    const SURFACE: jedem::Surface = jedem::Surface {
+        name: "e",
+        version: "0.0.0",
+        interfaces: &[hello::fallible::JEDEM_INTERFACE],
+    };
+    for (target, seam) in [
+        (jedem::Target::Python, "PyResult<i64>"),
+        (jedem::Target::Node, "napi::Result<i64>"),
+    ] {
+        let out = jedem::generate(&SURFACE, target, "core");
+        assert!(out.contains(seam), "{target:?} should raise: {out}");
+        assert!(out.contains("map_err(err)"), "{target:?}");
+    }
+}
