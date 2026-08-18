@@ -92,5 +92,21 @@ try:
 except ValueError as e:
     failures += check("parse error raises", "invalid digit" in str(e), True)
 
+print("enums arrive as a real Python class, not a magic string")
+failures += check("classify -> enum", hello.classify(20), hello.Ripeness.Done)
+failures += check("is a Ripeness", type(hello.classify(5)).__name__, "Ripeness")
+failures += check("partial", hello.classify(5), hello.Ripeness.Partial)
+failures += check("missing", hello.classify(0), hello.Ripeness.Missing)
+failures += check("pinned boundary name", hello.classify(-1), hello.Ripeness.not_applicable)
+failures += check("enum as a parameter", hello.is_settled(hello.Ripeness.Done), True)
+failures += check("enum as a parameter, false", hello.is_settled(hello.Ripeness.Partial), False)
+failures += check("Option<enum> present", hello.maybe(True), hello.Ripeness.Done)
+failures += check("Option<enum> absent", hello.maybe(False), None)
+try:
+    hello.is_settled("Done")
+    print("  FAIL a bare string should not be accepted"); failures += 1
+except TypeError:
+    print("  ok   a bare string is rejected -- the whole point")
+
 if failures:
-    print(f"\n{failures} failure(s) in the Box<dyn Error> section"); sys.exit(1)
+    print(f"\n{failures} failure(s)"); sys.exit(1)

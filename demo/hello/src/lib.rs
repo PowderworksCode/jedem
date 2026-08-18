@@ -76,7 +76,48 @@ impl Hello {
     }
 }
 
-jedem::surface! { name: "hello", version: "0.1.0", api: [Hello, fallible] }
+/// How far along a value is — the shape jawohl's `Syntax` has, and the reason
+/// enums exist: without them this crossed as a magic string.
+#[derive(jedem::Enum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ripeness {
+    /// Not there at all.
+    Missing,
+    /// Present but still arriving.
+    Partial,
+    /// Finished; it will not change.
+    Done,
+    /// A pinned boundary spelling, for a value whose name is already fixed.
+    #[jedem(name = "not_applicable")]
+    NotApplicable,
+}
+
+/// Functions over an enum, in both directions.
+#[jedem::export]
+pub mod ripeness {
+    use super::Ripeness;
+
+    /// Classify a length. Returns an enum.
+    pub fn classify(len: i32) -> Ripeness {
+        match len {
+            i32::MIN..=-1 => Ripeness::NotApplicable,
+            0 => Ripeness::Missing,
+            1..=9 => Ripeness::Partial,
+            _ => Ripeness::Done,
+        }
+    }
+
+    /// Is it safe to act on? Takes an enum.
+    pub fn is_settled(r: Ripeness) -> bool {
+        matches!(r, Ripeness::Done)
+    }
+
+    /// An enum inside an Option.
+    pub fn maybe(present: bool) -> Option<Ripeness> {
+        present.then_some(Ripeness::Done)
+    }
+}
+
+jedem::surface! { name: "hello", version: "0.1.0", api: [Hello, fallible, ripeness] }
 
 /// Errors that can come from more than one place.
 ///

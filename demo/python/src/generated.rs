@@ -17,6 +17,39 @@ use pyo3::prelude::*;
 fn err(e: impl std::fmt::Display) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
+/// How far along a value is — the shape jawohl's `Syntax` has, and the reason
+/// enums exist: without them this crossed as a magic string.
+#[pyclass(eq, eq_int)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Ripeness {
+    Missing,
+    Partial,
+    Done,
+    #[pyo3(name = "not_applicable")]
+    NotApplicable,
+}
+
+impl From<hello::Ripeness> for Ripeness {
+    fn from(v: hello::Ripeness) -> Self {
+        match v {
+            hello::Ripeness::Missing => Self::Missing,
+            hello::Ripeness::Partial => Self::Partial,
+            hello::Ripeness::Done => Self::Done,
+            hello::Ripeness::NotApplicable => Self::NotApplicable,
+        }
+    }
+}
+
+impl From<Ripeness> for hello::Ripeness {
+    fn from(v: Ripeness) -> Self {
+        match v {
+            Ripeness::Missing => Self::Missing,
+            Ripeness::Partial => Self::Partial,
+            Ripeness::Done => Self::Done,
+            Ripeness::NotApplicable => Self::NotApplicable,
+        }
+    }
+}
 
 // ---- Hello ----
 
@@ -83,8 +116,29 @@ pub fn checked(text: &str) -> PyResult<String> {
     hello::fallible::checked(text).map_err(err)
 }
 
+// ---- ripeness ----
+
+/// Classify a length. Returns an enum.
+#[pyfunction]
+pub fn classify(len: i32) -> Ripeness {
+    hello::ripeness::classify(len).into()
+}
+
+/// Is it safe to act on? Takes an enum.
+#[pyfunction]
+pub fn is_settled(r: Ripeness) -> bool {
+    hello::ripeness::is_settled(r.into())
+}
+
+/// An enum inside an Option.
+#[pyfunction]
+pub fn maybe(present: bool) -> Option<Ripeness> {
+    hello::ripeness::maybe(present).map(|v| v.into())
+}
+
 /// Register everything on the module. Call this from your `#[pymodule]`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<Ripeness>()?;
     m.add_function(wrap_pyfunction!(greet, m)?)?;
     m.add_function(wrap_pyfunction!(greet_checked, m)?)?;
     m.add_function(wrap_pyfunction!(add, m)?)?;
@@ -94,5 +148,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(shout, m)?)?;
     m.add_function(wrap_pyfunction!(halve_parsed, m)?)?;
     m.add_function(wrap_pyfunction!(checked, m)?)?;
+    m.add_function(wrap_pyfunction!(classify, m)?)?;
+    m.add_function(wrap_pyfunction!(is_settled, m)?)?;
+    m.add_function(wrap_pyfunction!(maybe, m)?)?;
     Ok(())
 }

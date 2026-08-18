@@ -61,8 +61,9 @@
 //! ## What v1 covers
 //!
 //! Functions that take and return **plain values**: `bool`, integers, `f64`,
-//! `String`/`&str`, `Vec<u8>`, `Option<T>`, `Vec<T>`; synchronous; fallible or
-//! not. Callbacks, handles to stateful objects, and streams are designed but
+//! `String`/`&str`, `Vec<u8>`, `Option<T>`, `Vec<T>`, and any C-like enum
+//! deriving [`Enum`]; synchronous; fallible or not — with any error type that
+//! implements `Display`, including `Box<dyn Error>`. Callbacks, handles to stateful objects, and streams are designed but
 //! not in v1 — see `DESIGN.md`.
 //!
 //! A type jedem cannot lower is a **compile error at the macro**, never an
@@ -71,7 +72,7 @@
 mod descriptor;
 mod gen;
 
-pub use descriptor::{Interface, Op, Param, Surface, Type};
+pub use descriptor::{EnumDef, EnumType, Interface, Op, Param, Surface, Type, Variant};
 pub use gen::{generate, generate_crate, GeneratedFile, Target};
 
 /// Mark functions for export — on an `impl` block, a `mod`, or a bare `fn`.
@@ -80,6 +81,22 @@ pub use jedem_macros::export;
 
 /// Declare a crate's surface. See the [crate docs](crate).
 pub use jedem_macros::surface;
+
+/// Let a C-like enum cross a language boundary.
+///
+/// Each language gets its own real enum — a class in Python, a string-literal
+/// union in TypeScript — rather than a bare string that only conventions keep
+/// correct.
+///
+/// ```
+/// #[derive(jedem::Enum)]
+/// pub enum Ripeness {
+///     Missing,
+///     Partial,
+///     Done,
+/// }
+/// ```
+pub use jedem_macros::Enum;
 
 /// Write every binding crate, from one line in a bin target.
 ///

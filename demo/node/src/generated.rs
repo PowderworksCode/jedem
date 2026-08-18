@@ -19,6 +19,37 @@ use napi_derive::napi;
 fn err(e: impl std::fmt::Display) -> napi::Error {
     napi::Error::from_reason(e.to_string())
 }
+/// How far along a value is — the shape jawohl's `Syntax` has, and the reason
+/// enums exist: without them this crossed as a magic string.
+#[napi(string_enum)]
+pub enum Ripeness {
+    Missing,
+    Partial,
+    Done,
+    NotApplicable,
+}
+
+impl From<hello::Ripeness> for Ripeness {
+    fn from(v: hello::Ripeness) -> Self {
+        match v {
+            hello::Ripeness::Missing => Self::Missing,
+            hello::Ripeness::Partial => Self::Partial,
+            hello::Ripeness::Done => Self::Done,
+            hello::Ripeness::NotApplicable => Self::NotApplicable,
+        }
+    }
+}
+
+impl From<Ripeness> for hello::Ripeness {
+    fn from(v: Ripeness) -> Self {
+        match v {
+            Ripeness::Missing => Self::Missing,
+            Ripeness::Partial => Self::Partial,
+            Ripeness::Done => Self::Done,
+            Ripeness::NotApplicable => Self::NotApplicable,
+        }
+    }
+}
 
 // ---- Hello ----
 
@@ -82,4 +113,24 @@ pub fn halve_parsed(text: String) -> napi::Result<i64> {
 #[napi(js_name = "checked")]
 pub fn checked(text: String) -> napi::Result<String> {
     hello::fallible::checked(&text).map_err(err)
+}
+
+// ---- ripeness ----
+
+/// Classify a length. Returns an enum.
+#[napi(js_name = "classify")]
+pub fn classify(len: i32) -> Ripeness {
+    hello::ripeness::classify(len).into()
+}
+
+/// Is it safe to act on? Takes an enum.
+#[napi(js_name = "isSettled")]
+pub fn is_settled(r: Ripeness) -> bool {
+    hello::ripeness::is_settled(r.into())
+}
+
+/// An enum inside an Option.
+#[napi(js_name = "maybe")]
+pub fn maybe(present: bool) -> Option<Ripeness> {
+    hello::ripeness::maybe(present).map(|v| v.into())
 }
