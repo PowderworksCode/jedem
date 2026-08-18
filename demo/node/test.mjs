@@ -7,7 +7,7 @@
 
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
-const hello = require("./.nodeimport/hello.node");
+const hello = require("./.jedem/hello.node");
 
 let failures = 0;
 const check = (label, got, want) => {

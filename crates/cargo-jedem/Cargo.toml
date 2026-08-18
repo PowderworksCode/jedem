@@ -6,6 +6,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+# A build tool, not the library: this dependency never reaches a consumer of
+# `jedem` itself.
+serde_json = "1"
+
 [[bin]]
 name = "cargo-jedem"
 path = "src/main.rs"
