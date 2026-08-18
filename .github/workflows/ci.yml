@@ -29,7 +29,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: ./demo/hello-py/run.sh
+      - run: ./demo/python/run.sh
 
   node-roundtrip:
     runs-on: ubuntu-latest
@@ -39,4 +39,4 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: ./demo/hello-node/run.sh
+      - run: ./demo/node/run.sh

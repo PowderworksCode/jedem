@@ -59,10 +59,72 @@ mod descriptor;
 mod gen;
 
 pub use descriptor::{Interface, Op, Param, Surface, Type};
-pub use gen::{generate, Target};
+pub use gen::{generate, generate_crate, GeneratedFile, Target};
 
 /// Mark an `impl` block for export. See the [crate docs](crate).
 pub use jedem_macros::export;
 
 /// Declare a crate's surface. See the [crate docs](crate).
 pub use jedem_macros::surface;
+
+/// Write every binding crate, from one line in a bin target.
+///
+/// jedem cannot read a `&'static` surface without running the crate that
+/// contains it, so generation is a bin target rather than a pure cargo
+/// subcommand — `cargo jedem generate` runs this. What the macro removes is the
+/// identical `main()` every consumer was otherwise writing.
+///
+/// ```ignore
+/// // src/bin/jedem-generate.rs
+/// jedem::generator_main! {
+///     surface: my_surface::JEDEM_SURFACE,
+///     core: "my_surface",
+///     out: "..",           // relative to CARGO_MANIFEST_DIR
+/// }
+/// ```
+///
+/// Each target gets a directory under `out` named after it, containing a
+/// complete crate. Every file carries an `@generated` marker.
+#[macro_export]
+macro_rules! generator_main {
+    (surface: $surface:expr, core: $core:literal, out: $out:literal $(,)?) => {
+        $crate::generator_main! {
+            surface: $surface, core: $core, core_dir: concat!("../", $core), out: $out
+        }
+    };
+    (surface: $surface:expr, core: $core:literal, core_dir: $dir:expr, out: $out:literal $(,)?) => {
+        fn main() -> ::std::io::Result<()> {
+            $crate::__write_all(
+                $surface,
+                $core,
+                $dir,
+                concat!(env!("CARGO_MANIFEST_DIR"), "/", $out),
+            )
+        }
+    };
+}
+
+/// The body of [`generator_main!`]. Public so the macro can reach it; not part
+/// of the supported surface.
+#[doc(hidden)]
+pub fn __write_all(
+    surface: &Surface,
+    core: &str,
+    core_dir: &str,
+    out_dir: &str,
+) -> std::io::Result<()> {
+    for &target in Target::ALL {
+        let dir = std::path::Path::new(out_dir).join(target.dir_name());
+        let package = format!("{}-{}", surface.name, target.dir_name());
+        for file in generate_crate(surface, target, core, core_dir, &package) {
+            let path = dir.join(&file.path);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&path, &file.contents)?;
+            println!("  {}", path.display());
+        }
+        println!("{} -> {}", target.label(), dir.display());
+    }
+    Ok(())
+}
