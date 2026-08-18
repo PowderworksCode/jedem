@@ -142,3 +142,56 @@ fn a_boxed_error_generates_the_same_seam_as_a_concrete_one() {
         assert!(out.contains("map_err(err)"), "{target:?}");
     }
 }
+
+/// Enums cross as each language's own enum, not as a string.
+#[test]
+fn an_enum_lowers_with_its_variants() {
+    let def = <hello::Ripeness as jedem::EnumType>::DEF;
+    assert_eq!(def.name, "Ripeness");
+    let names: Vec<&str> = def.variants.iter().map(|v| v.name).collect();
+    assert_eq!(names, ["Missing", "Partial", "Done", "NotApplicable"]);
+    // A pinned boundary spelling differs from the Rust name; the rest match.
+    let pinned = def
+        .variants
+        .iter()
+        .find(|v| v.name == "NotApplicable")
+        .unwrap();
+    assert_eq!(pinned.wire, "not_applicable");
+    assert_eq!(def.variants[0].wire, "Missing");
+    assert!(def.variants[2].doc.unwrap().contains("will not change"));
+}
+
+#[test]
+fn an_enum_is_found_through_containers() {
+    // `Option<Ripeness>` must still declare the enum, or the binding names a
+    // type it never defined.
+    let ops = hello::ripeness::JEDEM_INTERFACE.ops;
+    let maybe = ops.iter().find(|o| o.name == "maybe").unwrap();
+    assert_eq!(maybe.returns.enum_def().map(|d| d.name), Some("Ripeness"));
+}
+
+#[test]
+fn each_language_declares_the_enum_its_own_way() {
+    const SURFACE: jedem::Surface = jedem::Surface {
+        name: "e",
+        version: "0.0.0",
+        interfaces: &[hello::ripeness::JEDEM_INTERFACE],
+    };
+    let py = jedem::generate(&SURFACE, jedem::Target::Python, "core");
+    assert!(py.contains("#[pyclass(eq, eq_int)]"), "a real Python class");
+    assert!(py.contains(r#"#[pyo3(name = "not_applicable")]"#));
+    assert!(
+        py.contains("m.add_class::<Ripeness>()"),
+        "registered on the module"
+    );
+    // Conversion is mapped through the container, since From<A> for B does not
+    // give Option<A> -> Option<B>.
+    assert!(py.contains(".map(|v| v.into())"), "{py}");
+
+    let node = jedem::generate(&SURFACE, jedem::Target::Node, "core");
+    assert!(node.contains("#[napi(string_enum)]"), "a TS string union");
+    assert!(
+        node.contains("core::ripeness::is_settled(r.into())"),
+        "{node}"
+    );
+}

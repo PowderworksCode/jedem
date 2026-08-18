@@ -77,6 +77,12 @@ fn err(e: impl std::fmt::Display) -> PyErr {
 "#,
     );
 
+    // Declare every enum the surface reaches, once, with conversions to and
+    // from the core's own type. Python gets a real class, not a magic string.
+    for def in super::enums_in(surface) {
+        out.push_str(&enum_decl(def, core_path));
+    }
+
     let mut registrations = Vec::new();
     for iface in surface.interfaces {
         out.push_str(&format!("\n// ---- {} ----\n\n", iface.name));
@@ -88,14 +94,68 @@ fn err(e: impl std::fmt::Display) -> PyErr {
         }
     }
 
+    // Enum classes have to be added too, or Python sees the functions but not
+    // the type their values belong to.
+    let classes: String = super::enums_in(surface)
+        .iter()
+        .map(|d| format!("    m.add_class::<{}>()?;\n", d.name))
+        .collect();
     out.push_str(&format!(
-        "/// Register everything on the module. Call this from your `#[pymodule]`.\npub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {{\n{}    Ok(())\n}}\n",
+        "/// Register everything on the module. Call this from your `#[pymodule]`.\npub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {{\n{classes}{}    Ok(())\n}}\n",
         registrations
             .iter()
             .map(|n| format!("    m.add_function(wrap_pyfunction!({n}, m)?)?;\n"))
             .collect::<String>()
     ));
     out
+}
+
+/// A pyo3 enum, plus `From` both ways so the core's type never leaks.
+fn enum_decl(def: &crate::descriptor::EnumDef, core_path: &str) -> String {
+    let mut s = String::new();
+    if let Some(doc) = def.doc {
+        for line in doc.lines() {
+            if line.is_empty() {
+                s.push_str("///\n");
+            } else {
+                s.push_str(&format!("/// {line}\n"));
+            }
+        }
+    }
+    s.push_str("#[pyclass(eq, eq_int)]\n#[derive(Clone, Copy, PartialEq, Eq)]\n");
+    s.push_str(&format!("pub enum {} {{\n", def.name));
+    for v in def.variants {
+        if v.wire != v.name {
+            s.push_str(&format!("    #[pyo3(name = \"{}\")]\n", v.wire));
+        }
+        s.push_str(&format!("    {},\n", v.name));
+    }
+    s.push_str("}\n\n");
+
+    s.push_str(&format!(
+        "impl From<{core_path}::{n}> for {n} {{\n    fn from(v: {core_path}::{n}) -> Self {{\n        match v {{\n",
+        n = def.name
+    ));
+    for v in def.variants {
+        s.push_str(&format!(
+            "            {core_path}::{}::{} => Self::{},\n",
+            def.name, v.name, v.name
+        ));
+    }
+    s.push_str("        }\n    }\n}\n\n");
+
+    s.push_str(&format!(
+        "impl From<{n}> for {core_path}::{n} {{\n    fn from(v: {n}) -> Self {{\n        match v {{\n",
+        n = def.name
+    ));
+    for v in def.variants {
+        s.push_str(&format!(
+            "            {}::{} => Self::{},\n",
+            def.name, v.name, v.name
+        ));
+    }
+    s.push_str("        }\n    }\n}\n\n");
+    s
 }
 
 fn op_fn(op: &Op, exported: &str, core_path: &str) -> String {
@@ -117,7 +177,14 @@ fn op_fn(op: &Op, exported: &str, core_path: &str) -> String {
         .iter()
         .map(|p| format!("{}: {}", p.name, param_ty(&p.ty, p.borrowed)))
         .collect();
-    let args: Vec<String> = op.params.iter().map(|p| p.name.to_string()).collect();
+    let args: Vec<String> = op
+        .params
+        .iter()
+        .map(|p| match super::convert(&p.ty) {
+            Some(c) => format!("{}{c}", p.name),
+            None => p.name.to_string(),
+        })
+        .collect();
 
     s.push_str("#[pyfunction]\n");
     if exported != op.name {
@@ -131,11 +198,16 @@ fn op_fn(op: &Op, exported: &str, core_path: &str) -> String {
     ));
 
     let call = format!("{}::{}({})", core_path, op.rust_path, args.join(", "));
-    s.push_str(&match (op.fallible, op.returns) {
-        (true, Type::Unit) => format!("    {call}.map_err(err)?;\n    Ok(())\n"),
-        (true, _) => format!("    {call}.map_err(err)\n"),
-        (false, Type::Unit) => format!("    {call};\n"),
-        (false, _) => format!("    {call}\n"),
+    // An enum crosses as the binding-local type; `From` bridges it, mapped
+    // through any container.
+    let conv = super::convert(&op.returns);
+    s.push_str(&match (op.fallible, op.returns, conv) {
+        (true, Type::Unit, _) => format!("    {call}.map_err(err)?;\n    Ok(())\n"),
+        (true, _, Some(c)) => format!("    {call}.map(|v| v{c}).map_err(err)\n"),
+        (true, _, None) => format!("    {call}.map_err(err)\n"),
+        (false, Type::Unit, _) => format!("    {call};\n"),
+        (false, _, Some(c)) => format!("    {call}{c}\n"),
+        (false, _, None) => format!("    {call}\n"),
     });
     s.push_str("}\n");
     s
@@ -166,6 +238,9 @@ fn owned_ty(t: &Type) -> String {
         Type::Bytes => "Vec<u8>".into(),
         Type::Optional(inner) => format!("Option<{}>", owned_ty(inner)),
         Type::List(inner) => format!("Vec<{}>", owned_ty(inner)),
+        // The binding-local enum, not the core's -- they are different types
+        // and the generated `From` impls bridge them.
+        Type::Enum(d) => d.name.to_string(),
     }
 }
 

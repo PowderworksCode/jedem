@@ -73,6 +73,23 @@ try {
   console.log("  ok   add rejects non-numbers");
 }
 
+console.log("enums arrive as TypeScript string literals, not numbers");
+check("classify -> string union", hello.classify(20), "Done");
+check("partial", hello.classify(5), "Partial");
+check("missing", hello.classify(0), "Missing");
+check("pinned boundary name", hello.classify(-1), "NotApplicable");
+check("enum as a parameter", hello.isSettled("Done"), true);
+check("enum as a parameter, false", hello.isSettled("Partial"), false);
+check("Option<enum> present", hello.maybe(true), "Done");
+check("Option<enum> absent", hello.maybe(false), null);
+try {
+  hello.isSettled("NotAVariant");
+  console.log("  FAIL an unknown variant should be rejected");
+  failures++;
+} catch {
+  console.log("  ok   an unknown variant is rejected");
+}
+
 if (failures) {
   console.log(`\n${failures} failure(s)`);
   process.exit(1);

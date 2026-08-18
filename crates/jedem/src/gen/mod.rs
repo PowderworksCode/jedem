@@ -8,7 +8,7 @@
 mod node;
 mod python;
 
-use crate::descriptor::Surface;
+use crate::descriptor::{Surface, Type};
 
 /// A language to generate for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +170,48 @@ pub(crate) fn generated_marker(comment: &str, surface: &Surface, target: &str) -
     out.push_str(surface.version);
     out.push_str(". Regenerate with `cargo jedem generate`.\n");
     out
+}
+
+/// The suffix that converts a value between the core's type and the binding's.
+///
+/// `From<A> for B` does not give `Option<A> -> Option<B>`, so a container has to
+/// be mapped through. Returns `None` when the types are already the same, which
+/// is every type except an enum.
+pub(crate) fn convert(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Enum(_) => Some(".into()".into()),
+        Type::Optional(inner) => convert(inner).map(|c| format!(".map(|v| v{c})")),
+        Type::List(inner) => {
+            convert(inner).map(|c| format!(".into_iter().map(|v| v{c}).collect()"))
+        }
+        _ => None,
+    }
+}
+
+/// Every distinct enum the surface's ops reach, in first-appearance order.
+///
+/// Collected here rather than listed in `surface!` because the macro cannot
+/// resolve types: it records `Type::Enum(..)` inline where a signature named
+/// one, and the backend gathers them. That also means an enum used only inside
+/// an `Option` or a `Vec` is still declared.
+pub(crate) fn enums_in(surface: &Surface) -> Vec<&'static crate::descriptor::EnumDef> {
+    let mut seen: Vec<&'static crate::descriptor::EnumDef> = Vec::new();
+    let mut push = |d: Option<&'static crate::descriptor::EnumDef>| {
+        if let Some(d) = d {
+            if !seen.iter().any(|s| s.name == d.name) {
+                seen.push(d);
+            }
+        }
+    };
+    for iface in surface.interfaces {
+        for op in iface.ops {
+            for p in op.params {
+                push(p.ty.enum_def());
+            }
+            push(op.returns.enum_def());
+        }
+    }
+    seen
 }
 
 /// The banner every generated file carries.

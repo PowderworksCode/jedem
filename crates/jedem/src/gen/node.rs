@@ -103,6 +103,12 @@ fn err(e: impl std::fmt::Display) -> napi::Error {
 "#,
     );
 
+    // napi's `string_enum` gives TypeScript a string-literal union, which is
+    // what a TS developer would have written -- not an opaque number.
+    for def in super::enums_in(surface) {
+        out.push_str(&enum_decl(def, core_path));
+    }
+
     for iface in surface.interfaces {
         out.push_str(&format!("\n// ---- {} ----\n\n", iface.name));
         for op in iface.ops {
@@ -120,6 +126,51 @@ fn js_name(op: &Op) -> String {
         Some(pinned) => pinned.to_string(),
         None => super::lower_camel(op.name),
     }
+}
+
+/// A napi string enum, plus `From` both ways so the core's type never leaks.
+fn enum_decl(def: &crate::descriptor::EnumDef, core_path: &str) -> String {
+    let mut s = String::new();
+    if let Some(doc) = def.doc {
+        for line in doc.lines() {
+            if line.is_empty() {
+                s.push_str("///\n");
+            } else {
+                s.push_str(&format!("/// {line}\n"));
+            }
+        }
+    }
+    s.push_str("#[napi(string_enum)]\n");
+    s.push_str(&format!("pub enum {} {{\n", def.name));
+    for v in def.variants {
+        s.push_str(&format!("    {},\n", v.name));
+    }
+    s.push_str("}\n\n");
+
+    s.push_str(&format!(
+        "impl From<{core_path}::{n}> for {n} {{\n    fn from(v: {core_path}::{n}) -> Self {{\n        match v {{\n",
+        n = def.name
+    ));
+    for v in def.variants {
+        s.push_str(&format!(
+            "            {core_path}::{}::{} => Self::{},\n",
+            def.name, v.name, v.name
+        ));
+    }
+    s.push_str("        }\n    }\n}\n\n");
+
+    s.push_str(&format!(
+        "impl From<{n}> for {core_path}::{n} {{\n    fn from(v: {n}) -> Self {{\n        match v {{\n",
+        n = def.name
+    ));
+    for v in def.variants {
+        s.push_str(&format!(
+            "            {}::{} => Self::{},\n",
+            def.name, v.name, v.name
+        ));
+    }
+    s.push_str("        }\n    }\n}\n\n");
+    s
 }
 
 fn op_fn(op: &Op, core_path: &str) -> String {
@@ -157,13 +208,20 @@ fn op_fn(op: &Op, core_path: &str) -> String {
 
     // A `Vec<u8>` from the core becomes an owned `Buffer` on the way out; for
     // a fallible op the conversion applies to the payload, not the `Result`.
-    s.push_str(&match (op.fallible, op.returns) {
-        (true, Type::Unit) => format!("    {call}.map_err(err)?;\n    Ok(())\n"),
-        (true, Type::Bytes) => format!("    {call}.map(Into::into).map_err(err)\n"),
-        (true, _) => format!("    {call}.map_err(err)\n"),
-        (false, Type::Unit) => format!("    {call};\n"),
-        (false, Type::Bytes) => format!("    {call}.into()\n"),
-        (false, _) => format!("    {call}\n"),
+    // Bytes become an owned Buffer; an enum becomes the binding-local type,
+    // mapped through any container.
+    let conv = if op.returns == Type::Bytes {
+        Some(".into()".to_string())
+    } else {
+        super::convert(&op.returns)
+    };
+    s.push_str(&match (op.fallible, op.returns, conv) {
+        (true, Type::Unit, _) => format!("    {call}.map_err(err)?;\n    Ok(())\n"),
+        (true, _, Some(c)) => format!("    {call}.map(|v| v{c}).map_err(err)\n"),
+        (true, _, None) => format!("    {call}.map_err(err)\n"),
+        (false, Type::Unit, _) => format!("    {call};\n"),
+        (false, _, Some(c)) => format!("    {call}{c}\n"),
+        (false, _, None) => format!("    {call}\n"),
     });
     s.push_str("}\n");
     s
@@ -183,6 +241,9 @@ fn param_ty(p: &Param) -> String {
 
 /// How the parameter is passed on to the core.
 fn arg_expr(p: &Param) -> String {
+    if let Some(c) = super::convert(&p.ty) {
+        return format!("{}{c}", p.name);
+    }
     match (p.ty, p.borrowed) {
         // `Uint8Array` derefs to `[u8]`, so a borrow reaches a `&[u8]` core.
         (Type::Str, true) | (Type::Bytes, true) => format!("&{}", p.name),
@@ -204,6 +265,9 @@ fn owned_ty(t: &Type) -> String {
         Type::Bytes => "napi::bindgen_prelude::Buffer".into(),
         Type::Optional(inner) => format!("Option<{}>", owned_ty(inner)),
         Type::List(inner) => format!("Vec<{}>", owned_ty(inner)),
+        // The binding-local enum, not the core's -- they are different types
+        // and the generated `From` impls bridge them.
+        Type::Enum(d) => d.name.to_string(),
     }
 }
 

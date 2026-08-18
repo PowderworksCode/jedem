@@ -65,6 +65,45 @@ pub struct Param {
     pub borrowed: bool,
 }
 
+/// A C-like enum crossing the boundary.
+///
+/// Only unit variants: an enum carrying data is a union, which is a different
+/// feature. Each language gets its own real enum rather than a string —
+/// Python a member of an `enum`-like class, TypeScript a string-literal union —
+/// so a typo is caught by that language's own tooling instead of surfacing as
+/// a value nobody matched.
+#[derive(Debug, Clone, Copy)]
+pub struct EnumDef {
+    /// The Rust type name, reused as the type name in each language.
+    pub name: &'static str,
+    pub doc: Option<&'static str>,
+    pub variants: &'static [Variant],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Variant {
+    /// The Rust variant name.
+    pub name: &'static str,
+    /// How it is spelled at the boundary. Defaults to the Rust name; pin it
+    /// with `#[jedem(name = "...")]` when a wire spelling is already fixed.
+    pub wire: &'static str,
+    pub doc: Option<&'static str>,
+}
+
+/// Implemented by `#[derive(jedem::Enum)]`. The bridge from a Rust type to its
+/// descriptor, so a signature can name the type directly.
+#[diagnostic::on_unimplemented(
+    message = "jedem cannot lower `{Self}`",
+    label = "not a type jedem can cross a language boundary",
+    note = "v1 handles bool, integers, f64, String/&str, Vec<u8>, Option<T>, Vec<T>, \
+            and any enum deriving `jedem::Enum`",
+    note = "there is deliberately no fallback that would pass this across as an opaque blob"
+)]
+pub trait EnumType {
+    /// This type's descriptor.
+    const DEF: &'static EnumDef;
+}
+
 /// The v1 type vocabulary: plain values.
 ///
 /// Deliberately small. A type jedem cannot lower is a compile error at the
@@ -84,6 +123,8 @@ pub enum Type {
     Bytes,
     Optional(&'static Type),
     List(&'static Type),
+    /// A C-like enum; see [`EnumDef`].
+    Enum(&'static EnumDef),
 }
 
 impl Type {
@@ -91,4 +132,27 @@ impl Type {
     pub fn is_optional(&self) -> bool {
         matches!(self, Type::Optional(_))
     }
+
+    /// The enum this type reaches, looking through `Option` and `Vec`.
+    pub fn enum_def(&self) -> Option<&'static EnumDef> {
+        match self {
+            Type::Enum(d) => Some(d),
+            Type::Optional(inner) | Type::List(inner) => inner.enum_def(),
+            _ => None,
+        }
+    }
 }
+
+impl PartialEq for EnumDef {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+impl Eq for EnumDef {}
+
+impl PartialEq for Variant {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.wire == other.wire
+    }
+}
+impl Eq for Variant {}

@@ -475,14 +475,13 @@ fn lower_type(t: &Type) -> syn::Result<proc_macro2::TokenStream> {
                     let inner = lower_type(inner)?;
                     Ok(quote!(::jedem::Type::List(&#inner)))
                 }
-                other => Err(syn::Error::new(
-                    t.span(),
-                    format!(
-                        "jedem cannot lower `{other}` yet. v1 handles bool, integers, f64, \
-                         String/&str, Vec<u8>, Option<T> and Vec<T>. There is deliberately no \
-                         fallback that would pass this across as an opaque blob."
-                    ),
-                )),
+                // Any other named type is taken to be an enum. If it is not,
+                // the `EnumType` bound fails with the diagnostic attached to
+                // that trait, which says what v1 handles and that there is no
+                // opaque-blob fallback.
+                _ => Ok(quote!(::jedem::Type::Enum(
+                    <#p as ::jedem::EnumType>::DEF
+                ))),
             }
         }
         other => Err(syn::Error::new(
@@ -507,4 +506,98 @@ fn generic_arg<'a>(seg: &'a syn::PathSegment, at: &Type) -> syn::Result<&'a Type
             _ => None,
         })
         .ok_or_else(|| syn::Error::new(at.span(), "expected a type argument"))
+}
+
+/// Derive on a C-like enum so it can cross a language boundary.
+///
+/// Only unit variants: an enum carrying data is a union, which is a separate
+/// feature. Each variant's boundary spelling defaults to its Rust name and can
+/// be pinned with `#[jedem(name = "...")]` when a wire value is already fixed.
+///
+/// ```ignore
+/// #[derive(jedem::Enum)]
+/// pub enum Syntax {
+///     Missing,
+///     Incomplete,
+///     Complete,
+/// }
+/// ```
+#[proc_macro_derive(Enum, attributes(jedem))]
+pub fn derive_enum(item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as syn::DeriveInput);
+    match expand_enum(&input) {
+        Ok(ts) => ts.into(),
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
+fn expand_enum(input: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let syn::Data::Enum(data) = &input.data else {
+        return Err(syn::Error::new(
+            input.span(),
+            "#[derive(jedem::Enum)] is for enums; a struct is a record",
+        ));
+    };
+    if data.variants.is_empty() {
+        return Err(syn::Error::new(
+            input.span(),
+            "an enum with no variants has no values to cross",
+        ));
+    }
+
+    let mut variants = Vec::new();
+    for v in &data.variants {
+        if !matches!(v.fields, syn::Fields::Unit) {
+            return Err(syn::Error::new(
+                v.span(),
+                "jedem enums carry no data -- a variant with fields is a union, \
+                 which is a separate feature. Move the payload to a parameter, \
+                 or keep this type out of the exported surface.",
+            ));
+        }
+        if v.discriminant.is_some() {
+            // A discriminant is fine in Rust but says nothing at the boundary,
+            // where variants cross by name.
+        }
+        let name = v.ident.to_string();
+        let wire = export_name_of(&v.attrs)?.unwrap_or_else(|| name.clone());
+        // A variant has to be *nameable* in every target language, and Python
+        // enum members must be identifiers. Allowing arbitrary text here would
+        // generate a binding that does not compile, in one language only --
+        // the worst place to discover it.
+        if !is_ident(&wire) {
+            return Err(syn::Error::new(
+                v.span(),
+                format!(
+                    "`{wire}` cannot name an enum variant at the boundary: it must be a \
+                     valid identifier, because some targets (Python) require one. \
+                     Use letters, digits and underscores, not starting with a digit."
+                ),
+            ));
+        }
+        let doc = opt_str(doc_of(&v.attrs).as_deref());
+        variants.push(quote! {
+            ::jedem::Variant { name: #name, wire: #wire, doc: #doc }
+        });
+    }
+
+    let ident = &input.ident;
+    let name = ident.to_string();
+    let doc = opt_str(doc_of(&input.attrs).as_deref());
+    Ok(quote! {
+        impl ::jedem::EnumType for #ident {
+            const DEF: &'static ::jedem::EnumDef = &::jedem::EnumDef {
+                name: #name,
+                doc: #doc,
+                variants: &[#(#variants),*],
+            };
+        }
+    })
+}
+
+/// Is this a valid identifier in every target language we emit?
+fn is_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_alphabetic() || c == '_')
+        && chars.all(|c| c.is_alphanumeric() || c == '_')
 }
