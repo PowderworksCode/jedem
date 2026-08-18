@@ -6,21 +6,143 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-    parse_macro_input, spanned::Spanned, FnArg, ImplItem, ItemImpl, Lit, Meta, ReturnType, Type,
+    parse_macro_input, spanned::Spanned, FnArg, ImplItem, Item, ItemFn, ItemImpl, ItemMod, Lit,
+    Meta, ReturnType, Type,
 };
 
-/// Mark an `impl` block for export.
+/// Mark functions for export.
 ///
-/// The block is emitted unchanged — the functions you wrote are the functions
-/// that run — alongside a constant describing them. Drift between declaration
-/// and implementation is impossible because there is only one artefact.
+/// Accepts an `impl` block, a `mod`, or a single `fn`:
+///
+/// ```ignore
+/// #[jedem::export]
+/// pub fn greet(name: &str) -> String { … }
+///
+/// #[jedem::export]
+/// mod api {
+///     pub fn greet(name: &str) -> String { … }
+/// }
+///
+/// #[jedem::export]
+/// impl Greeter { pub fn greet(name: &str) -> String { … } }
+/// ```
+///
+/// Whatever the form, what you wrote is emitted unchanged — the functions you
+/// wrote are the functions that run — alongside a constant describing them.
+/// Drift between declaration and implementation is impossible because there is
+/// only one artefact.
+///
+/// A bare `fn` or a `mod` exists so that a crate exporting free functions does
+/// not have to invent a type for them to hang off. `pub struct Api;` conveys
+/// nothing, and every consumer was writing one.
 #[proc_macro_attribute]
 pub fn export(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(item as ItemImpl);
-    match expand_export(&input) {
+    let parsed = parse_macro_input!(item as Item);
+    let expanded = match &parsed {
+        Item::Impl(i) => expand_export(i),
+        Item::Fn(f) => expand_fn(f),
+        Item::Mod(m) => expand_mod(m),
+        other => Err(syn::Error::new(
+            other.span(),
+            "#[jedem::export] goes on an `impl` block, a `mod`, or a `fn`",
+        )),
+    };
+    match expanded {
         Ok(ts) => ts.into(),
         Err(e) => e.to_compile_error().into(),
     }
+}
+
+/// A single exported function. The interface is named after the function, and
+/// the surface lists it directly.
+fn expand_fn(f: &ItemFn) -> syn::Result<proc_macro2::TokenStream> {
+    let op = lower_fn(&f.sig, &f.attrs, &f.vis, "")?.ok_or_else(|| {
+        syn::Error::new(
+            f.sig.ident.span(),
+            "#[jedem::export] on a function needs it to be `pub`",
+        )
+    })?;
+    let name = f.sig.ident.to_string();
+    let ident = &f.sig.ident;
+    let doc = opt_str(doc_of(&f.attrs).as_deref());
+    let cleaned = strip_jedem_attrs_fn(f);
+    // Rust keeps modules and functions in separate namespaces, so a module
+    // named after the function can carry its descriptor without shadowing it.
+    // That is what lets `surface! { api: [greet] }` read the same for a bare
+    // function as for a type.
+    Ok(quote! {
+        #cleaned
+
+        #[doc(hidden)]
+        pub mod #ident {
+            /// The jedem descriptor for the function of the same name.
+            pub const JEDEM_INTERFACE: &'static ::jedem::Interface = &::jedem::Interface {
+                name: #name,
+                doc: #doc,
+                ops: &[#op],
+            };
+        }
+    })
+}
+
+/// Every public function in a module, as one interface named after the module.
+fn expand_mod(m: &ItemMod) -> syn::Result<proc_macro2::TokenStream> {
+    let Some((_, items)) = &m.content else {
+        return Err(syn::Error::new(
+            m.span(),
+            "#[jedem::export] needs the module's body, not a `mod foo;` declaration",
+        ));
+    };
+    let mod_name = m.ident.to_string();
+    let mut ops = Vec::new();
+    for item in items {
+        if let Item::Fn(f) = item {
+            if let Some(op) = lower_fn(&f.sig, &f.attrs, &f.vis, &format!("{mod_name}::"))? {
+                ops.push(op);
+            }
+        }
+    }
+    if ops.is_empty() {
+        return Err(syn::Error::new(
+            m.span(),
+            "#[jedem::export] found no public functions in this module",
+        ));
+    }
+    let doc = opt_str(doc_of(&m.attrs).as_deref());
+    let mut cleaned = strip_jedem_attrs_mod(m);
+    // The descriptor goes inside the module, so it is reached the same way a
+    // type's is: `mymod::JEDEM_INTERFACE`.
+    let holder: syn::Item = syn::parse_quote! {
+        /// The jedem descriptor for this module.
+        #[doc(hidden)]
+        pub const JEDEM_INTERFACE: &'static ::jedem::Interface = &::jedem::Interface {
+            name: #mod_name,
+            doc: #doc,
+            ops: &[#(#ops),*],
+        };
+    };
+    if let Some((_, items)) = &mut cleaned.content {
+        items.push(holder);
+    }
+    Ok(quote! { #cleaned })
+}
+
+fn strip_jedem_attrs_fn(f: &ItemFn) -> ItemFn {
+    let mut out = f.clone();
+    out.attrs.retain(|a| !a.path().is_ident("jedem"));
+    out
+}
+
+fn strip_jedem_attrs_mod(m: &ItemMod) -> ItemMod {
+    let mut out = m.clone();
+    if let Some((_, items)) = &mut out.content {
+        for item in items {
+            if let Item::Fn(f) = item {
+                f.attrs.retain(|a| !a.path().is_ident("jedem"));
+            }
+        }
+    }
+    out
 }
 
 fn expand_export(input: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
@@ -54,11 +176,6 @@ fn expand_export(input: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
     let mut ops = Vec::new();
     for item in &input.items {
         let ImplItem::Fn(f) = item else { continue };
-        if !matches!(f.vis, syn::Visibility::Public(_)) {
-            continue;
-        }
-        // v1 exports free functions: an associated fn with no receiver. A
-        // method needs a handle to hang itself on, which is beyond v1.
         if let Some(FnArg::Receiver(r)) = f.sig.inputs.first() {
             return Err(syn::Error::new(
                 r.span(),
@@ -67,60 +184,9 @@ fn expand_export(input: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
                  Make it an associated function, or remove it from the exported impl.",
             ));
         }
-        if f.sig.asyncness.is_some() {
-            return Err(syn::Error::new(
-                f.sig.asyncness.span(),
-                "jedem v1 is synchronous; async is not lowered yet",
-            ));
+        if let Some(op) = lower_fn(&f.sig, &f.attrs, &f.vis, &format!("{type_name}::"))? {
+            ops.push(op);
         }
-
-        let name = f.sig.ident.to_string();
-        let doc = doc_of(&f.attrs);
-        let export_name = export_name_of(&f.attrs)?;
-
-        let mut params = Vec::new();
-        for arg in &f.sig.inputs {
-            let FnArg::Typed(pt) = arg else { continue };
-            let pname = match &*pt.pat {
-                syn::Pat::Ident(i) => i.ident.to_string(),
-                other => {
-                    return Err(syn::Error::new(
-                        other.span(),
-                        "jedem needs a plain parameter name",
-                    ))
-                }
-            };
-            let ty = lower_type(&pt.ty)?;
-            let borrowed = matches!(&*pt.ty, Type::Reference(_));
-            params.push((pname, ty, borrowed));
-        }
-
-        let (returns, fallible) = match &f.sig.output {
-            ReturnType::Default => (quote!(::jedem::Type::Unit), false),
-            ReturnType::Type(_, t) => match unwrap_result(t) {
-                Some(inner) => (lower_type(inner)?, true),
-                None => (lower_type(t)?, false),
-            },
-        };
-
-        let rust_path = format!("{type_name}::{name}");
-        let doc_tok = opt_str(doc.as_deref());
-        let export_tok = opt_str(export_name.as_deref());
-        let param_toks = params.iter().map(|(n, t, b)| {
-            quote! { ::jedem::Param { name: #n, ty: #t, borrowed: #b } }
-        });
-
-        ops.push(quote! {
-            ::jedem::Op {
-                name: #name,
-                doc: #doc_tok,
-                export_name: #export_tok,
-                params: &[#(#param_toks),*],
-                returns: #returns,
-                fallible: #fallible,
-                rust_path: #rust_path,
-            }
-        });
     }
 
     if ops.is_empty() {
@@ -164,8 +230,10 @@ pub fn surface(input: TokenStream) -> TokenStream {
     let decl = parse_macro_input!(input as SurfaceDecl);
     let name = decl.name;
     let version = decl.version;
-    let types = decl.api;
-    let refs = types.iter().map(|t| quote! { <#t>::JEDEM_INTERFACE });
+    // Every form `#[jedem::export]` accepts exposes the interface at the same
+    // place -- `Path::JEDEM_INTERFACE` -- so `api:` reads uniformly whether the
+    // entry names a type, a module, or a bare function.
+    let refs = decl.api.iter().map(|t| quote! { #t::JEDEM_INTERFACE });
     quote! {
         /// The jedem surface for this crate.
         pub const JEDEM_SURFACE: &'static ::jedem::Surface = &::jedem::Surface {
@@ -218,6 +286,75 @@ impl syn::parse::Parse for SurfaceDecl {
             api,
         })
     }
+}
+
+/// Turn one function signature into an `Op`, or `None` when it is not public.
+///
+/// Shared by all three forms `#[jedem::export]` accepts, so an `impl` block, a
+/// `mod` and a bare `fn` cannot drift apart in what they capture.
+fn lower_fn(
+    sig: &syn::Signature,
+    attrs: &[syn::Attribute],
+    vis: &syn::Visibility,
+    path_prefix: &str,
+) -> syn::Result<Option<proc_macro2::TokenStream>> {
+    if !matches!(vis, syn::Visibility::Public(_)) {
+        return Ok(None);
+    }
+    if sig.asyncness.is_some() {
+        return Err(syn::Error::new(
+            sig.asyncness.span(),
+            "jedem v1 is synchronous; async is not lowered yet",
+        ));
+    }
+
+    let name = sig.ident.to_string();
+    let doc = doc_of(attrs);
+    let export_name = export_name_of(attrs)?;
+
+    let mut params = Vec::new();
+    for arg in &sig.inputs {
+        let FnArg::Typed(pt) = arg else { continue };
+        let pname = match &*pt.pat {
+            syn::Pat::Ident(i) => i.ident.to_string(),
+            other => {
+                return Err(syn::Error::new(
+                    other.span(),
+                    "jedem needs a plain parameter name",
+                ))
+            }
+        };
+        let ty = lower_type(&pt.ty)?;
+        let borrowed = matches!(&*pt.ty, Type::Reference(_));
+        params.push((pname, ty, borrowed));
+    }
+
+    let (returns, fallible) = match &sig.output {
+        ReturnType::Default => (quote!(::jedem::Type::Unit), false),
+        ReturnType::Type(_, t) => match unwrap_result(t) {
+            Some(inner) => (lower_type(inner)?, true),
+            None => (lower_type(t)?, false),
+        },
+    };
+
+    let rust_path = format!("{path_prefix}{name}");
+    let doc_tok = opt_str(doc.as_deref());
+    let export_tok = opt_str(export_name.as_deref());
+    let param_toks = params.iter().map(|(n, t, b)| {
+        quote! { ::jedem::Param { name: #n, ty: #t, borrowed: #b } }
+    });
+
+    Ok(Some(quote! {
+        ::jedem::Op {
+            name: #name,
+            doc: #doc_tok,
+            export_name: #export_tok,
+            params: &[#(#param_toks),*],
+            returns: #returns,
+            fallible: #fallible,
+            rust_path: #rust_path,
+        }
+    }))
 }
 
 // ---- helpers ---------------------------------------------------------------

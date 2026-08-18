@@ -9,7 +9,8 @@
 //!
 //! ## How it works
 //!
-//! Annotate an ordinary `impl` block and name it in a surface:
+//! Annotate ordinary Rust and name it in a surface. An `impl` block, a `mod`,
+//! or a single `fn` — whichever suits the code you already have:
 //!
 //! ```
 //! pub struct Greeter;
@@ -23,6 +24,18 @@
 //! }
 //!
 //! jedem::surface! { name: "hello", version: "0.1.0", api: [Greeter] }
+//! ```
+//!
+//! A crate exporting free functions needs no type to hang them off:
+//!
+//! ```
+//! /// Greet someone by name.
+//! #[jedem::export]
+//! pub fn greet(name: &str) -> String {
+//!     format!("Hello, {name}!")
+//! }
+//!
+//! jedem::surface! { name: "hello", version: "0.1.0", api: [greet] }
 //! ```
 //!
 //! The macros expand to the impl you wrote plus a `&'static` [`Surface`]
@@ -61,7 +74,8 @@ mod gen;
 pub use descriptor::{Interface, Op, Param, Surface, Type};
 pub use gen::{generate, generate_crate, GeneratedFile, Target};
 
-/// Mark an `impl` block for export. See the [crate docs](crate).
+/// Mark functions for export — on an `impl` block, a `mod`, or a bare `fn`.
+/// See the [crate docs](crate).
 pub use jedem_macros::export;
 
 /// Declare a crate's surface. See the [crate docs](crate).
