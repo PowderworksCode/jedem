@@ -11,7 +11,7 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -20,23 +20,20 @@ jobs:
       - run: cargo test --all
 
   # The end-to-end proofs: a real host process importing generated bindings and
-  # calling them. A backend without one of these does not count as done.
-  python-roundtrip:
+  # calling them. `cargo jedem run` builds the binding, places the artefact
+  # under the name that runtime imports, and runs the script -- the eight lines
+  # of shell each of these used to need now live in the tool.
+  roundtrips:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: ./demo/python/run.sh
-
-  node-roundtrip:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+        with: { python-version: "3.12" }
       - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - run: ./demo/node/run.sh
+        with: { node-version: "22" }
+      - run: cargo install --path crates/cargo-jedem
+      - run: cargo jedem run --python test.py
+        working-directory: demo/python
+      - run: cargo jedem run --node test.mjs
+        working-directory: demo/node
