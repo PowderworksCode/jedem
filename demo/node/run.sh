@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 echo "== regenerating the binding"
-cargo run -q -p hello --bin generate
+cargo run -q -p hello --bin jedem-generate
 
 echo "== building the addon"
 cargo build -q -p hello-node

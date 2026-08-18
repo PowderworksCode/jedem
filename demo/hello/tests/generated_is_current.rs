@@ -10,46 +10,67 @@
 //! catches generator changes too, not just surface changes. And it must cover
 //! *every* backend, or adding a language quietly halves the guarantee.
 
-fn check(target: jedem::Target, committed: &str, path: &str) {
-    let fresh = jedem::generate(hello::JEDEM_SURFACE, target, "hello");
-    assert_eq!(
-        committed, fresh,
-        "\n\n{path} is out of date.\nrun: cargo run -p hello --bin generate\n"
-    );
+/// Regenerate in memory and diff against every committed file, for every
+/// target. Now covers the whole crate -- manifest, shims and build script --
+/// not just the binding source, since jedem writes all of them.
+fn check(target: jedem::Target, dir: &str) {
+    for file in jedem::generate_crate(
+        hello::JEDEM_SURFACE,
+        target,
+        "hello",
+        "../hello",
+        &format!("hello-{}", target.dir_name()),
+    ) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join(dir)
+            .join(&file.path);
+        let committed = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} is missing: {e}", path.display()));
+        assert_eq!(
+            committed, file.contents,
+            "\n\ndemo/{dir}/{} is out of date.\nrun: cargo jedem generate\n",
+            file.path
+        );
+    }
 }
 
 #[test]
-fn the_committed_python_binding_matches_the_surface() {
-    check(
-        jedem::Target::Python,
-        include_str!("../../hello-py/src/generated.rs"),
-        "demo/hello-py/src/generated.rs",
-    );
+fn the_committed_python_crate_matches_the_surface() {
+    check(jedem::Target::Python, "python");
 }
 
 #[test]
-fn the_committed_node_binding_matches_the_surface() {
-    check(
-        jedem::Target::Node,
-        include_str!("../../hello-node/src/generated.rs"),
-        "demo/hello-node/src/generated.rs",
-    );
+fn the_committed_node_crate_matches_the_surface() {
+    check(jedem::Target::Node, "node");
 }
 
-/// Every target must be covered above. A new backend that nobody added a guard
-/// for is a backend whose committed output can rot unnoticed.
+/// Every target must be covered above. A new backend nobody added a guard for
+/// is a backend whose committed output can rot unnoticed.
 #[test]
 fn every_target_has_a_drift_guard() {
-    // Update this list *and* add a test above when adding a backend.
     let guarded = [jedem::Target::Python, jedem::Target::Node];
-    assert_eq!(
-        guarded.len(),
-        jedem::Target::ALL.len(),
-        "jedem::Target::ALL has {} entries but only {} are drift-guarded",
-        jedem::Target::ALL.len(),
-        guarded.len()
-    );
+    assert_eq!(guarded.len(), jedem::Target::ALL.len());
     for t in jedem::Target::ALL {
         assert!(guarded.contains(t), "{t:?} has no drift guard");
+    }
+}
+
+/// Every file jedem writes carries the `@generated` marker review tools look
+/// for, so nobody has to guess which files are hand-written.
+#[test]
+fn every_generated_file_is_marked_as_generated() {
+    for &target in jedem::Target::ALL {
+        for file in
+            jedem::generate_crate(hello::JEDEM_SURFACE, target, "hello", "../hello", "hello-x")
+        {
+            let head: String = file.contents.lines().take(3).collect::<Vec<_>>().join("\n");
+            assert!(
+                head.contains("@generated"),
+                "{:?}/{} has no @generated marker; it starts:\n{head}",
+                target,
+                file.path
+            );
+        }
     }
 }

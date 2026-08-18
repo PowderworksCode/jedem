@@ -1,0 +1,11 @@
+[package]
+name = "cargo-jedem"
+description = "The `cargo jedem` subcommand."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "cargo-jedem"
+path = "src/main.rs"
