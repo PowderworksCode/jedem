@@ -189,8 +189,18 @@ fn handle_class(iface: &crate::descriptor::Interface, core_path: &str) -> String
         }
     }
     s.push_str("#[pyclass]\n");
+    // Wrapping goes through `From` rather than a struct literal at each
+    // constructor. `Self { inner }` is short enough that rustfmt leaves it on
+    // one line, whereas `Self { inner: some::long::Path::new() }` passes
+    // `struct_lit_width` and gets broken across four -- output the generator
+    // would have to predict to stay `cargo fmt` clean.
     s.push_str(&format!(
-        "pub struct {name} {{\n    inner: {core_path}::{name},\n}}\n\n#[pymethods]\nimpl {name} {{\n"
+        "pub struct {name} {{\n    inner: {core_path}::{name},\n}}\n\n\
+         impl From<{core_path}::{name}> for {name} {{\n\
+         \x20   fn from(inner: {core_path}::{name}) -> Self {{\n\
+         \x20       Self {{ inner }}\n\
+         \x20   }}\n\
+         }}\n\n#[pymethods]\nimpl {name} {{\n"
     ));
 
     for op in iface.ops {
@@ -241,11 +251,9 @@ fn handle_class(iface: &crate::descriptor::Interface, core_path: &str) -> String
                 ));
                 let call = format!("{core_path}::{name}::{}({})", op.name, args.join(", "));
                 if op.fallible {
-                    s.push_str(&format!(
-                        "        Ok(Self {{ inner: {call}.map_err(err)? }})\n"
-                    ));
+                    s.push_str(&format!("        Ok({call}.map_err(err)?.into())\n"));
                 } else {
-                    s.push_str(&format!("        Self {{ inner: {call} }}\n"));
+                    s.push_str(&format!("        {call}.into()\n"));
                 }
             }
             OpKind::Method { mutable } => {
@@ -278,6 +286,11 @@ fn handle_class(iface: &crate::descriptor::Interface, core_path: &str) -> String
             }
         }
         s.push_str("    }\n\n");
+    }
+    // The loop leaves a blank line after the last method; rustfmt would remove
+    // it, so remove it here.
+    while s.ends_with("\n\n") {
+        s.pop();
     }
     s.push_str("}\n");
     s

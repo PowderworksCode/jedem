@@ -143,18 +143,24 @@ pub struct Counter {
     inner: hello::Counter,
 }
 
+impl From<hello::Counter> for Counter {
+    fn from(inner: hello::Counter) -> Self {
+        Self { inner }
+    }
+}
+
 #[pymethods]
 impl Counter {
     /// Start at zero.
     #[new]
     fn new() -> Self {
-        Self { inner: hello::Counter::new() }
+        hello::Counter::new().into()
     }
 
     /// Start at a given value, refusing a negative one.
     #[staticmethod]
     fn starting_at(start: i64) -> PyResult<Self> {
-        Ok(Self { inner: hello::Counter::starting_at(start).map_err(err)? })
+        Ok(hello::Counter::starting_at(start).map_err(err)?.into())
     }
 
     /// Add to the tally. State persists across calls — that is the point.
@@ -176,7 +182,6 @@ impl Counter {
     fn halve(&mut self) -> PyResult<i64> {
         self.inner.halve().map_err(err)
     }
-
 }
 
 /// Register everything on the module. Call this from your `#[pymodule]`.

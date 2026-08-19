@@ -261,10 +261,61 @@ pub(crate) mod tests_support {
         ops: &[GREET, FALLIBLE],
         handle: false,
     };
+    /// A handle, whose generated constructor is the construct where the
+    /// generator most easily drifts from rustfmt: a struct literal long enough
+    /// to pass `struct_lit_width` gets broken across lines.
+    pub const CTOR: Op = Op {
+        kind: OpKind::Ctor,
+        name: "new",
+        doc: Some("Start at zero."),
+        export_name: None,
+        params: &[],
+        returns: Type::Unit,
+        fallible: false,
+        rust_path: "Counter::new",
+    };
+
+    pub const FALLIBLE_CTOR: Op = Op {
+        kind: OpKind::Ctor,
+        name: "starting_at",
+        doc: None,
+        export_name: None,
+        params: &[Param {
+            name: "start",
+            ty: Type::I64,
+            borrowed: false,
+        }],
+        returns: Type::Unit,
+        fallible: true,
+        rust_path: "Counter::starting_at",
+    };
+
+    pub const BUMP: Op = Op {
+        kind: OpKind::Method { mutable: true },
+        name: "add",
+        doc: None,
+        export_name: None,
+        params: &[Param {
+            name: "n",
+            ty: Type::I64,
+            borrowed: false,
+        }],
+        returns: Type::Unit,
+        fallible: false,
+        rust_path: "Counter::add",
+    };
+
+    pub const HANDLE: Interface = Interface {
+        name: "Counter",
+        doc: Some("A live counter."),
+        ops: &[CTOR, FALLIBLE_CTOR, BUMP],
+        handle: true,
+    };
+
     pub const SURFACE: Surface = Surface {
         name: "demo",
         version: "9.9.9",
-        interfaces: &[&IFACE],
+        interfaces: &[&IFACE, &HANDLE],
     };
 }
 
@@ -510,5 +561,69 @@ mod camel {
         assert_eq!(super::lower_camel("reverse_bytes"), "reverseBytes");
         assert_eq!(super::lower_camel("greet"), "greet");
         assert_eq!(super::lower_camel("a_b_c"), "aBC");
+    }
+}
+
+#[cfg(test)]
+mod rustfmt_stability {
+    use super::*;
+
+    /// Generated Rust is already formatted the way rustfmt would format it.
+    ///
+    /// Generated crates are workspace members, so `cargo fmt --all` rewrites
+    /// them like any other source. Every time the generator's layout differed
+    /// from rustfmt's, the next `cargo fmt` silently edited the committed
+    /// bindings and the drift guard failed pointing at the surface -- which
+    /// nobody had touched. Marking the files `#![rustfmt::skip]` would say this
+    /// directly, but custom inner attributes are still unstable, so instead the
+    /// generator agrees with rustfmt and this test holds it to that.
+    ///
+    /// Skipped when rustfmt is not installed, so the suite still runs on a
+    /// toolchain without it.
+    #[test]
+    fn generated_rust_is_already_rustfmt_clean() {
+        let Some(formatted_of) = rustfmt() else {
+            eprintln!("rustfmt not available; skipping");
+            return;
+        };
+        for &target in Target::ALL {
+            for file in generate_crate(&tests_support::SURFACE, target, "demo", "..", "b", "demo") {
+                if !file.path.ends_with(".rs") {
+                    continue;
+                }
+                let formatted = formatted_of(&file.contents);
+                assert_eq!(
+                    file.contents,
+                    formatted,
+                    "\n\n{}/{} is not what rustfmt would write, so `cargo fmt` will \
+                     edit the committed bindings and break the drift guard.\n",
+                    target.dir_name(),
+                    file.path
+                );
+            }
+        }
+    }
+
+    /// A `source -> formatted` function, or `None` if rustfmt is missing.
+    fn rustfmt() -> Option<fn(&str) -> String> {
+        use std::process::{Command, Stdio};
+        Command::new("rustfmt").arg("--version").output().ok()?;
+        fn run(src: &str) -> String {
+            use std::io::Write;
+            let mut c = Command::new("rustfmt")
+                .args(["--emit", "stdout", "--edition", "2021", "--quiet"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("spawn rustfmt");
+            c.stdin
+                .take()
+                .unwrap()
+                .write_all(src.as_bytes())
+                .expect("write to rustfmt");
+            let out = c.wait_with_output().expect("rustfmt");
+            String::from_utf8(out.stdout).expect("utf-8")
+        }
+        Some(run)
     }
 }

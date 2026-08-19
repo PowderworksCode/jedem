@@ -142,18 +142,24 @@ pub struct Counter {
     inner: hello::Counter,
 }
 
+impl From<hello::Counter> for Counter {
+    fn from(inner: hello::Counter) -> Self {
+        Self { inner }
+    }
+}
+
 #[napi]
 impl Counter {
     /// Start at zero.
     #[napi(constructor)]
     pub fn new() -> Self {
-        Self { inner: hello::Counter::new() }
+        hello::Counter::new().into()
     }
 
     /// Start at a given value, refusing a negative one.
     #[napi(factory, js_name = "startingAt")]
     pub fn starting_at(start: i64) -> napi::Result<Self> {
-        Ok(Self { inner: hello::Counter::starting_at(start).map_err(err)? })
+        Ok(hello::Counter::starting_at(start).map_err(err)?.into())
     }
 
     /// Add to the tally. State persists across calls — that is the point.
@@ -179,5 +185,4 @@ impl Counter {
     pub fn halve(&mut self) -> napi::Result<i64> {
         self.inner.halve().map_err(err)
     }
-
 }
