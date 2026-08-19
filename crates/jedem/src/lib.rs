@@ -135,6 +135,66 @@ macro_rules! generator_main {
     };
 }
 
+/// Verify the committed bindings against the surface, or write them.
+///
+/// The body of the test [`surface!`] emits when given `bindings:`. Public so
+/// the macro can reach it; not part of the supported surface.
+///
+/// Writing is opt-in via `JEDEM_WRITE=1`, so an ordinary `cargo test` is a
+/// check and never a silent rewrite -- the same shape as every other
+/// snapshot-testing tool, and the reason no generator file is needed.
+#[doc(hidden)]
+pub fn __verify_or_write(surface: &Surface, package: &str, bindings_rel: &str, manifest_dir: &str) {
+    let write = std::env::var("JEDEM_WRITE").is_ok_and(|v| v != "0");
+    let root = std::path::Path::new(manifest_dir).join(bindings_rel);
+    // The crate holding the exported functions is this one; the generated
+    // manifests need its *package* name and the generated code its crate name,
+    // which differ whenever the package name contains a hyphen.
+    let crate_name = package.replace('-', "_");
+    // From `<bindings>/<target>` back to the manifest directory.
+    let depth = std::path::Path::new(bindings_rel)
+        .components()
+        .filter(|c| matches!(c, std::path::Component::Normal(_)))
+        .count()
+        + 1;
+    let core_dir = vec![".."; depth].join("/");
+
+    let mut stale = Vec::new();
+    for &target in Target::ALL {
+        let dir = root.join(target.dir_name());
+        for file in generate_crate(
+            surface,
+            target,
+            &crate_name,
+            &core_dir,
+            &format!("{}-{}", surface.name, target.dir_name()),
+            package,
+        ) {
+            let path = dir.join(&file.path);
+            if write {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).expect("could not create binding directory");
+                }
+                std::fs::write(&path, &file.contents).expect("could not write binding");
+            } else {
+                match std::fs::read_to_string(&path) {
+                    Ok(on_disk) if on_disk == file.contents => {}
+                    Ok(_) => stale.push(format!("  {} differs", path.display())),
+                    Err(e) => stale.push(format!("  {} is missing ({e})", path.display())),
+                }
+            }
+        }
+    }
+
+    assert!(
+        stale.is_empty(),
+        "\n\nthe committed bindings do not match this surface:\n{}\n\n\
+         regenerate with:  JEDEM_WRITE=1 cargo test\n\
+         or:               cargo jedem generate\n",
+        stale.join("\n")
+    );
+}
+
 /// The body of [`generator_main!`]. Public so the macro can reach it; not part
 /// of the supported surface.
 #[doc(hidden)]
@@ -147,7 +207,9 @@ pub fn __write_all(
     for &target in Target::ALL {
         let dir = std::path::Path::new(out_dir).join(target.dir_name());
         let package = format!("{}-{}", surface.name, target.dir_name());
-        for file in generate_crate(surface, target, core, core_dir, &package) {
+        // The core's package name; when a caller passes a crate name with
+        // underscores the two coincide, which is the common case here.
+        for file in generate_crate(surface, target, core, core_dir, &package, core) {
             let path = dir.join(&file.path);
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;

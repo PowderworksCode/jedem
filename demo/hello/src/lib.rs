@@ -117,7 +117,15 @@ pub mod ripeness {
     }
 }
 
-jedem::surface! { name: "hello", version: "0.1.0", api: [Hello, fallible, ripeness] }
+jedem::surface! {
+    name: "hello",
+    version: "0.1.0",
+    api: [Hello, fallible, ripeness],
+    // With `bindings:` the surface owns generation: no generator bin, no
+    // drift-guard test to write. `cargo test` checks the committed bindings;
+    // `JEDEM_WRITE=1 cargo test` rewrites them.
+    bindings: "bindings",
+}
 
 /// Errors that can come from more than one place.
 ///

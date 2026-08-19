@@ -1,0 +1,6 @@
+# Run `cargo fmt` on the hand-written crates only, never `--all`.
+#
+# The generated binding crates are not formatted: rustfmt rewraps method chains
+# exceeding its chain_width, which jedem cannot predict, so formatting them makes
+# them differ from a fresh generation and the drift guard fails. Generated code
+# is not formatted; it is regenerated.
