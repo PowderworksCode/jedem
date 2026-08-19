@@ -140,10 +140,11 @@ pub fn generate_crate(
     core_crate: &str,
     core_dir: &str,
     package: &str,
+    core_package: &str,
 ) -> Vec<GeneratedFile> {
     let mut files = match target {
-        Target::Python => python::scaffold(surface, core_crate, core_dir, package),
-        Target::Node => node::scaffold(surface, core_crate, core_dir, package),
+        Target::Python => python::scaffold(surface, core_dir, package, core_package),
+        Target::Node => node::scaffold(surface, core_dir, package, core_package),
     };
     files.push(GeneratedFile {
         path: format!("src/{}", target.default_file_name()),

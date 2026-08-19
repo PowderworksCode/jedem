@@ -230,10 +230,37 @@ pub fn surface(input: TokenStream) -> TokenStream {
     let decl = parse_macro_input!(input as SurfaceDecl);
     let name = decl.name;
     let version = decl.version;
+    let bindings = decl.bindings.clone();
     // Every form `#[jedem::export]` accepts exposes the interface at the same
     // place -- `Path::JEDEM_INTERFACE` -- so `api:` reads uniformly whether the
     // entry names a type, a module, or a bare function.
     let refs = decl.api.iter().map(|t| quote! { #t::JEDEM_INTERFACE });
+    // With `bindings:` given, the surface also owns generation: a test keeps
+    // the committed bindings honest, and writes them when asked. That removes
+    // the last hand-written file a consumer needed -- there is no generator bin
+    // to add, and nothing to remember to run.
+    let generation = match bindings {
+        None => quote!(),
+        Some(dir) => quote! {
+            #[cfg(test)]
+            mod __jedem_bindings {
+                /// The bindings must match this surface.
+                ///
+                /// Regenerate with `JEDEM_WRITE=1 cargo test`, or
+                /// `cargo jedem generate`, which does the same thing.
+                #[test]
+                fn are_current() {
+                    ::jedem::__verify_or_write(
+                        super::JEDEM_SURFACE,
+                        env!("CARGO_PKG_NAME"),
+                        #dir,
+                        env!("CARGO_MANIFEST_DIR"),
+                    );
+                }
+            }
+        },
+    };
+
     quote! {
         /// The jedem surface for this crate.
         pub const JEDEM_SURFACE: &'static ::jedem::Surface = &::jedem::Surface {
@@ -241,6 +268,8 @@ pub fn surface(input: TokenStream) -> TokenStream {
             version: #version,
             interfaces: &[#(#refs),*],
         };
+
+        #generation
     }
     .into()
 }
@@ -249,12 +278,16 @@ struct SurfaceDecl {
     name: String,
     version: String,
     api: Vec<syn::Path>,
+    /// Where to write the binding crates, relative to the manifest. When
+    /// given, the surface owns generation and no generator file is needed.
+    bindings: Option<String>,
 }
 
 impl syn::parse::Parse for SurfaceDecl {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let mut name = None;
         let mut version = None;
+        let mut bindings = None;
         let mut api = Vec::new();
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
@@ -262,6 +295,7 @@ impl syn::parse::Parse for SurfaceDecl {
             match key.to_string().as_str() {
                 "name" => name = Some(input.parse::<syn::LitStr>()?.value()),
                 "version" => version = Some(input.parse::<syn::LitStr>()?.value()),
+                "bindings" => bindings = Some(input.parse::<syn::LitStr>()?.value()),
                 "api" => {
                     let content;
                     syn::bracketed!(content in input);
@@ -271,7 +305,7 @@ impl syn::parse::Parse for SurfaceDecl {
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
-                        format!("unknown key `{other}`; expected name, version or api"),
+                        format!("unknown key `{other}`; expected name, version, api or bindings"),
                     ))
                 }
             }
@@ -284,6 +318,7 @@ impl syn::parse::Parse for SurfaceDecl {
                 .ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "missing `name`"))?,
             version: version.unwrap_or_else(|| "0.0.0".into()),
             api,
+            bindings,
         })
     }
 }

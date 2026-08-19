@@ -15,7 +15,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: cargo fmt --all -- --check
+      # Hand-written crates only; generated bindings are regenerated, not formatted.
+      - run: cargo fmt -p jedem -p jedem-macros -p cargo-jedem -p hello -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all
 
@@ -34,6 +35,6 @@ jobs:
         with: { node-version: "22" }
       - run: cargo install --path crates/cargo-jedem
       - run: cargo jedem run --python test.py
-        working-directory: demo/python
+        working-directory: demo/hello/bindings
       - run: cargo jedem run --node test.mjs
-        working-directory: demo/node
+        working-directory: demo/hello/bindings

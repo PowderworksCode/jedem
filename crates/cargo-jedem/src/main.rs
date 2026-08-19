@@ -11,13 +11,11 @@
 //!
 //!     cargo jedem generate
 //!
-//! runs the crate's `jedem-generate` bin, by convention.
+//! runs the generation test the surface emits.
 
 mod host;
 
 use std::process::{Command, ExitCode};
-
-const BIN: &str = "jedem-generate";
 
 fn main() -> ExitCode {
     // Cargo invokes us as `cargo-jedem jedem <args>`; drop the repeated name.
@@ -41,29 +39,32 @@ fn main() -> ExitCode {
     }
 }
 
-fn run_generator(rest: &[String]) -> ExitCode {
-    let mut cmd = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-    cmd.args(["run", "--quiet", "--bin", BIN]);
-    if !rest.is_empty() {
-        cmd.arg("--").args(rest);
-    }
+fn run_generator(_rest: &[String]) -> ExitCode {
+    // Generation lives in the test `surface! { bindings: ... }` emits, so this
+    // needs no bin target in the user's crate and nothing for them to write.
+    // Writing is opt-in, which is why an ordinary `cargo test` is a check.
+    let mut cmd = Command::new(host::cargo());
+    cmd.args(["test", "--quiet", "__jedem_bindings"])
+        .env("JEDEM_WRITE", "1");
     match cmd.status() {
-        Ok(s) if s.success() => ExitCode::SUCCESS,
+        Ok(s) if s.success() => {
+            println!("bindings written");
+            ExitCode::SUCCESS
+        }
         Ok(_) => {
             eprintln!(
-                "\ncargo jedem: `{BIN}` failed.\n\
-                 If this crate has no generator yet, add one:\n\n\
-                 \x20   // src/bin/{BIN}.rs\n\
-                 \x20   jedem::generator_main! {{\n\
-                 \x20       surface: my_crate::JEDEM_SURFACE,\n\
-                 \x20       core: \"my_crate\",\n\
-                 \x20       out: \"..\",\n\
+                "\ncargo jedem generate: no surface found.\n\
+                 Add `bindings:` to your `jedem::surface!` so it owns generation:\n\n\
+                 \x20   jedem::surface! {{\n\
+                 \x20       name: \"mycrate\", version: \"0.1.0\",\n\
+                 \x20       api: [my_module],\n\
+                 \x20       bindings: \"bindings\",\n\
                  \x20   }}\n"
             );
             ExitCode::FAILURE
         }
         Err(e) => {
-            eprintln!("cargo jedem: could not run cargo: {e}");
+            eprintln!("cargo jedem generate: could not run cargo: {e}");
             ExitCode::FAILURE
         }
     }
@@ -156,7 +157,7 @@ fn help() {
     println!(
         "cargo jedem — project a Rust crate's functions into other languages\n\n\
          USAGE:\n\
-         \x20   cargo jedem generate                  run this crate's `{BIN}` bin\n\
+         \x20   cargo jedem generate                  run this crate's the surface's generation test\n\
          \x20   cargo jedem run --python <script>     build the binding, run it\n\
          \x20   cargo jedem run --node <script>\n\
          \x20   cargo jedem help\n\n\

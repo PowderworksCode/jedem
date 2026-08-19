@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/jedem", "crates/jedem-macros", "crates/cargo-jedem", "demo/hello", "demo/python", "demo/node"]
+members = ["crates/jedem", "crates/jedem-macros", "crates/cargo-jedem", "demo/hello", "demo/hello/bindings/python", "demo/hello/bindings/node"]
 
 [workspace.package]
 version = "0.1.0"
