@@ -84,8 +84,19 @@ fn err(e: impl std::fmt::Display) -> PyErr {
     }
 
     let mut registrations = Vec::new();
+    let mut classes: Vec<String> = super::enums_in(surface)
+        .iter()
+        .map(|d| d.name.to_string())
+        .collect();
+
     for iface in surface.interfaces {
         out.push_str(&format!("\n// ---- {} ----\n\n", iface.name));
+        if iface.handle {
+            out.push_str(&handle_class(iface, core_path));
+            out.push('\n');
+            classes.push(iface.name.to_string());
+            continue;
+        }
         for op in iface.ops {
             let exported = op.export_name.unwrap_or(op.name);
             out.push_str(&op_fn(op, exported, core_path));
@@ -94,11 +105,11 @@ fn err(e: impl std::fmt::Display) -> PyErr {
         }
     }
 
-    // Enum classes have to be added too, or Python sees the functions but not
-    // the type their values belong to.
-    let classes: String = super::enums_in(surface)
+    // Classes have to be added too, or Python sees the functions but not the
+    // types their values belong to.
+    let classes: String = classes
         .iter()
-        .map(|d| format!("    m.add_class::<{}>()?;\n", d.name))
+        .map(|n| format!("    m.add_class::<{n}>()?;\n"))
         .collect();
     out.push_str(&format!(
         "/// Register everything on the module. Call this from your `#[pymodule]`.\npub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {{\n{classes}{}    Ok(())\n}}\n",
@@ -158,6 +169,120 @@ fn enum_decl(def: &crate::descriptor::EnumDef, core_path: &str) -> String {
     s
 }
 
+/// A handle: a live object holding the core value.
+///
+/// The binding crate depends on the core crate, so the class can simply own a
+/// `core::Thing` — there is no need for the trait-and-`Arc` indirection a
+/// generator needs when the declared surface is separate from the code that
+/// implements it.
+fn handle_class(iface: &crate::descriptor::Interface, core_path: &str) -> String {
+    use crate::descriptor::OpKind;
+    let name = iface.name;
+    let mut s = String::new();
+    if let Some(doc) = iface.doc {
+        for line in doc.lines() {
+            if line.is_empty() {
+                s.push_str("///\n");
+            } else {
+                s.push_str(&format!("/// {line}\n"));
+            }
+        }
+    }
+    s.push_str("#[pyclass]\n");
+    s.push_str(&format!(
+        "pub struct {name} {{\n    inner: {core_path}::{name},\n}}\n\n#[pymethods]\nimpl {name} {{\n"
+    ));
+
+    for op in iface.ops {
+        let exported = op.export_name.unwrap_or(op.name);
+        if let Some(doc) = op.doc {
+            for line in doc.lines() {
+                if line.is_empty() {
+                    s.push_str("    ///\n");
+                } else {
+                    s.push_str(&format!("    /// {line}\n"));
+                }
+            }
+        }
+        let params: Vec<String> = op
+            .params
+            .iter()
+            .map(|p| format!("{}: {}", p.name, param_ty(&p.ty, p.borrowed)))
+            .collect();
+        let args: Vec<String> = op
+            .params
+            .iter()
+            .map(|p| match super::convert(&p.ty) {
+                Some(c) => format!("{}{c}", p.name),
+                None => p.name.to_string(),
+            })
+            .collect();
+
+        match op.kind {
+            OpKind::Ctor => {
+                // Python has one `__new__`. The op actually called `new` gets
+                // it; any other constructor becomes a static factory, which is
+                // how alternate constructors are spelled in Python anyway.
+                let primary = op.name == "new";
+                if primary {
+                    s.push_str("    #[new]\n");
+                } else {
+                    s.push_str("    #[staticmethod]\n");
+                }
+                let ret = if op.fallible {
+                    "PyResult<Self>"
+                } else {
+                    "Self"
+                };
+                s.push_str(&format!(
+                    "    fn {}({}) -> {ret} {{\n",
+                    if primary { "new" } else { exported },
+                    params.join(", ")
+                ));
+                let call = format!("{core_path}::{name}::{}({})", op.name, args.join(", "));
+                if op.fallible {
+                    s.push_str(&format!(
+                        "        Ok(Self {{ inner: {call}.map_err(err)? }})\n"
+                    ));
+                } else {
+                    s.push_str(&format!("        Self {{ inner: {call} }}\n"));
+                }
+            }
+            OpKind::Method { mutable } => {
+                let recv = if mutable { "&mut self" } else { "&self" };
+                let all = std::iter::once(recv.to_string())
+                    .chain(params.iter().cloned())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if exported != op.name {
+                    s.push_str(&format!("    #[pyo3(name = \"{exported}\")]\n"));
+                }
+                s.push_str(&format!(
+                    "    fn {}({all}){} {{\n",
+                    exported,
+                    return_clause(op)
+                ));
+                let call = format!("self.inner.{}({})", op.name, args.join(", "));
+                s.push_str(&body(op, &call, "        "));
+            }
+            OpKind::Function => {
+                s.push_str("    #[staticmethod]\n");
+                s.push_str(&format!(
+                    "    fn {}({}) -> {} {{\n",
+                    exported,
+                    params.join(", "),
+                    return_ty(op)
+                ));
+                let call = format!("{core_path}::{name}::{}({})", op.name, args.join(", "));
+                s.push_str(&body(op, &call, "        "));
+            }
+        }
+        s.push_str("    }\n\n");
+    }
+    s.push_str("}\n");
+    s
+}
+
 fn op_fn(op: &Op, exported: &str, core_path: &str) -> String {
     let mut s = String::new();
     if let Some(doc) = op.doc {
@@ -198,19 +323,23 @@ fn op_fn(op: &Op, exported: &str, core_path: &str) -> String {
     ));
 
     let call = format!("{}::{}({})", core_path, op.rust_path, args.join(", "));
-    // An enum crosses as the binding-local type; `From` bridges it, mapped
-    // through any container.
-    let conv = super::convert(&op.returns);
-    s.push_str(&match (op.fallible, op.returns, conv) {
-        (true, Type::Unit, _) => format!("    {call}.map_err(err)?;\n    Ok(())\n"),
-        (true, _, Some(c)) => format!("    {call}.map(|v| v{c}).map_err(err)\n"),
-        (true, _, None) => format!("    {call}.map_err(err)\n"),
-        (false, Type::Unit, _) => format!("    {call};\n"),
-        (false, _, Some(c)) => format!("    {call}{c}\n"),
-        (false, _, None) => format!("    {call}\n"),
-    });
+    s.push_str(&body(op, &call, "    "));
     s.push_str("}\n");
     s
+}
+
+/// The body of a call: convert an enum through any container, and map the error
+/// into this language's failure mechanism.
+fn body(op: &Op, call: &str, indent: &str) -> String {
+    let conv = super::convert(&op.returns);
+    match (op.fallible, op.returns, conv) {
+        (true, Type::Unit, _) => format!("{indent}{call}.map_err(err)?;\n{indent}Ok(())\n"),
+        (true, _, Some(c)) => format!("{indent}{call}.map(|v| v{c}).map_err(err)\n"),
+        (true, _, None) => format!("{indent}{call}.map_err(err)\n"),
+        (false, Type::Unit, _) => format!("{indent}{call};\n"),
+        (false, _, Some(c)) => format!("{indent}{call}{c}\n"),
+        (false, _, None) => format!("{indent}{call}\n"),
+    }
 }
 
 /// A parameter's Rust spelling in the generated signature.
@@ -250,5 +379,15 @@ fn return_ty(op: &Op) -> String {
         format!("PyResult<{inner}>")
     } else {
         inner
+    }
+}
+
+/// The ` -> T` clause, or nothing at all for an infallible unit
+/// return -- `-> ()` is noise a hand-written binding would not have.
+fn return_clause(op: &Op) -> String {
+    if !op.fallible && op.returns == Type::Unit {
+        String::new()
+    } else {
+        format!(" -> {}", return_ty(op))
     }
 }

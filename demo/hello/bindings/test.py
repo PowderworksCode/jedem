@@ -74,10 +74,38 @@ try:
 except TypeError:
     print("  ok   add rejects non-integers with TypeError")
 
-if failures:
-    print(f"\n{failures} failure(s)")
-    sys.exit(1)
-print("\nall checks passed")
+print("handles: state that lives across calls")
+c = hello.Counter()
+check("starts empty", c.total(), 0)
+c.add(10)
+c.add(6)
+check("state persisted across calls", c.total(), 16)
+check("and was counted", c.steps(), 2)
+check("halve", c.halve(), 8)
+
+print("two handles are independent objects")
+a, b = hello.Counter(), hello.Counter()
+a.add(1)
+check("a moved", a.total(), 1)
+check("b did not", b.total(), 0)
+
+print("an alternate constructor is a static factory")
+d = hello.Counter.starting_at(100)
+check("started at 100", d.total(), 100)
+try:
+    hello.Counter.starting_at(-1)
+    print("  FAIL negative should raise"); failures += 1
+except ValueError as e:
+    check("negative raises", str(e), "-1 is negative")
+
+print("a failing method leaves the handle usable")
+odd = hello.Counter.starting_at(7)
+try:
+    odd.halve()
+    print("  FAIL odd should raise"); failures += 1
+except ValueError:
+    check("still usable after a failure", odd.total(), 7)
+
 
 print("Box<dyn Error>: two failure types, one signature")
 failures += check("halve_parsed ok", hello.halve_parsed("10"), 5)

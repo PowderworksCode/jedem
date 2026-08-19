@@ -136,9 +136,53 @@ pub fn maybe(present: bool) -> Option<Ripeness> {
     hello::ripeness::maybe(present).map(|v| v.into())
 }
 
+// ---- Counter ----
+
+#[pyclass]
+pub struct Counter {
+    inner: hello::Counter,
+}
+
+#[pymethods]
+impl Counter {
+    /// Start at zero.
+    #[new]
+    fn new() -> Self {
+        Self { inner: hello::Counter::new() }
+    }
+
+    /// Start at a given value, refusing a negative one.
+    #[staticmethod]
+    fn starting_at(start: i64) -> PyResult<Self> {
+        Ok(Self { inner: hello::Counter::starting_at(start).map_err(err)? })
+    }
+
+    /// Add to the tally. State persists across calls — that is the point.
+    fn add(&mut self, n: i64) {
+        self.inner.add(n);
+    }
+
+    /// The running total.
+    fn total(&self) -> i64 {
+        self.inner.total()
+    }
+
+    /// How many times `add` has been called.
+    fn steps(&self) -> i64 {
+        self.inner.steps()
+    }
+
+    /// Halve the total, refusing an odd one.
+    fn halve(&mut self) -> PyResult<i64> {
+        self.inner.halve().map_err(err)
+    }
+
+}
+
 /// Register everything on the module. Call this from your `#[pymodule]`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Ripeness>()?;
+    m.add_class::<Counter>()?;
     m.add_function(wrap_pyfunction!(greet, m)?)?;
     m.add_function(wrap_pyfunction!(greet_checked, m)?)?;
     m.add_function(wrap_pyfunction!(add, m)?)?;

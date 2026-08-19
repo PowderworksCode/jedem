@@ -25,10 +25,11 @@ fn exported_functions_are_ordinary_rust() {
 fn the_descriptor_describes_what_was_written() {
     assert_eq!(JEDEM_SURFACE.name, "hello");
     assert_eq!(JEDEM_SURFACE.version, "0.1.0");
-    // A type and two modules, to prove `api:` takes every form.
-    assert_eq!(JEDEM_SURFACE.interfaces.len(), 3);
+    // Two types and two modules, to prove `api:` takes every form -- including
+    // a handle (`Counter`) alongside plain namespaces.
+    assert_eq!(JEDEM_SURFACE.interfaces.len(), 4);
     let names: Vec<&str> = JEDEM_SURFACE.interfaces.iter().map(|i| i.name).collect();
-    assert_eq!(names, ["Hello", "fallible", "ripeness"]);
+    assert_eq!(names, ["Hello", "fallible", "ripeness", "Counter"]);
 
     let iface = JEDEM_SURFACE.interfaces[0];
     assert_eq!(iface.name, "Hello");

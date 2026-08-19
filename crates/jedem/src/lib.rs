@@ -72,7 +72,7 @@
 mod descriptor;
 mod gen;
 
-pub use descriptor::{EnumDef, EnumType, Interface, Op, Param, Surface, Type, Variant};
+pub use descriptor::{EnumDef, EnumType, Interface, Op, OpKind, Param, Surface, Type, Variant};
 pub use gen::{generate, generate_crate, GeneratedFile, Target};
 
 /// Mark functions for export — on an `impl` block, a `mod`, or a bare `fn`.

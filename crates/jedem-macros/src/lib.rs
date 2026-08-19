@@ -80,6 +80,7 @@ fn expand_fn(f: &ItemFn) -> syn::Result<proc_macro2::TokenStream> {
                 name: #name,
                 doc: #doc,
                 ops: &[#op],
+                handle: false,
             };
         }
     })
@@ -119,6 +120,7 @@ fn expand_mod(m: &ItemMod) -> syn::Result<proc_macro2::TokenStream> {
             name: #mod_name,
             doc: #doc,
             ops: &[#(#ops),*],
+            handle: false,
         };
     };
     if let Some((_, items)) = &mut cleaned.content {
@@ -177,12 +179,14 @@ fn expand_export(input: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
     for item in &input.items {
         let ImplItem::Fn(f) = item else { continue };
         if let Some(FnArg::Receiver(r)) = f.sig.inputs.first() {
-            return Err(syn::Error::new(
-                r.span(),
-                "jedem v1 exports functions that take and return plain values; \
-                 a method with `self` needs a handle, which is not in v1 yet. \
-                 Make it an associated function, or remove it from the exported impl.",
-            ));
+            if r.reference.is_none() {
+                return Err(syn::Error::new(
+                    r.span(),
+                    "a method taking `self` by value consumes the handle, which has no \
+                     meaning once it is owned by another language. Take `&self` or \
+                     `&mut self`, or make it an associated function.",
+                ));
+            }
         }
         if let Some(op) = lower_fn(&f.sig, &f.attrs, &f.vis, &format!("{type_name}::"))? {
             ops.push(op);
@@ -195,6 +199,18 @@ fn expand_export(input: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
             "#[jedem::export] found no public functions to export",
         ));
     }
+
+    // A handle if anything in the block needs an instance: a method with a
+    // receiver, or a constructor that makes one.
+    let is_handle = input.items.iter().any(|item| {
+        let ImplItem::Fn(f) = item else { return false };
+        if !matches!(f.vis, syn::Visibility::Public(_)) {
+            return false;
+        }
+        matches!(f.sig.inputs.first(), Some(FnArg::Receiver(_)))
+            || matches!(&f.sig.output, ReturnType::Type(_, t)
+                if matches!(unwrap_result(t).unwrap_or(t), Type::Path(p) if p.path.is_ident("Self")))
+    });
 
     let const_name = format_ident!("JEDEM_INTERFACE");
     let iface_doc = opt_str(doc_of(&input.attrs).as_deref());
@@ -210,6 +226,7 @@ fn expand_export(input: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
                 name: #type_name_lit,
                 doc: #iface_doc,
                 ops: &[#(#ops),*],
+                handle: #is_handle,
             };
         }
     })
@@ -347,6 +364,28 @@ fn lower_fn(
     let doc = doc_of(attrs);
     let export_name = export_name_of(attrs)?;
 
+    // A receiver makes it a method; a `Self` return with no receiver makes it a
+    // constructor. Everything else is a plain function.
+    let receiver = sig.inputs.iter().find_map(|a| match a {
+        FnArg::Receiver(r) => Some(r),
+        _ => None,
+    });
+    let returns_self = match &sig.output {
+        ReturnType::Type(_, t) => {
+            let inner = unwrap_result(t).unwrap_or(t);
+            matches!(inner, Type::Path(p) if p.path.is_ident("Self"))
+        }
+        ReturnType::Default => false,
+    };
+    let kind = match (receiver, returns_self) {
+        (Some(r), _) => {
+            let mutable = r.mutability.is_some();
+            quote!(::jedem::OpKind::Method { mutable: #mutable })
+        }
+        (None, true) => quote!(::jedem::OpKind::Ctor),
+        (None, false) => quote!(::jedem::OpKind::Function),
+    };
+
     let mut params = Vec::new();
     for arg in &sig.inputs {
         let FnArg::Typed(pt) = arg else { continue };
@@ -366,10 +405,17 @@ fn lower_fn(
 
     let (returns, fallible) = match &sig.output {
         ReturnType::Default => (quote!(::jedem::Type::Unit), false),
-        ReturnType::Type(_, t) => match unwrap_result(t) {
-            Some(inner) => (lower_type(inner)?, true),
-            None => (lower_type(t)?, false),
-        },
+        ReturnType::Type(_, t) => {
+            let inner = unwrap_result(t);
+            let fallible = inner.is_some();
+            let target = inner.unwrap_or(t);
+            if matches!(target, Type::Path(p) if p.path.is_ident("Self")) {
+                // A constructor returns the handle; there is no crossing type.
+                (quote!(::jedem::Type::Unit), fallible)
+            } else {
+                (lower_type(target)?, fallible)
+            }
+        }
     };
 
     let rust_path = format!("{path_prefix}{name}");
@@ -381,6 +427,7 @@ fn lower_fn(
 
     Ok(Some(quote! {
         ::jedem::Op {
+            kind: #kind,
             name: #name,
             doc: #doc_tok,
             export_name: #export_tok,

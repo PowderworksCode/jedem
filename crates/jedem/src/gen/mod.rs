@@ -225,11 +225,12 @@ pub(crate) fn banner(surface: &Surface, target: &str) -> String {
 
 #[cfg(test)]
 pub(crate) mod tests_support {
-    use crate::descriptor::{Interface, Op, Param, Surface, Type};
+    use crate::descriptor::{Interface, Op, OpKind, Param, Surface, Type};
 
     /// A surface exercising a doc comment with a blank line, a pinned export
     /// name, a fallible op and a borrowed param.
     pub const GREET: Op = Op {
+        kind: OpKind::Function,
         name: "greet",
         doc: Some("Greet.\n\nWith a blank line, which is where trailing\nwhitespace creeps in."),
         export_name: None,
@@ -244,6 +245,7 @@ pub(crate) mod tests_support {
     };
 
     pub const FALLIBLE: Op = Op {
+        kind: OpKind::Function,
         name: "checked",
         doc: None,
         export_name: Some("checked_alias"),
@@ -257,6 +259,7 @@ pub(crate) mod tests_support {
         name: "Hello",
         doc: None,
         ops: &[GREET, FALLIBLE],
+        handle: false,
     };
     pub const SURFACE: Surface = Surface {
         name: "demo",
@@ -268,9 +271,10 @@ pub(crate) mod tests_support {
 #[cfg(test)]
 mod tests {
     use super::{generate, Target};
-    use crate::descriptor::{Interface, Op, Param, Surface, Type};
+    use crate::descriptor::{Interface, Op, OpKind, Param, Surface, Type};
 
     const GREET: Op = Op {
+        kind: OpKind::Function,
         name: "greet",
         doc: Some("Greet."),
         export_name: None,
@@ -285,6 +289,7 @@ mod tests {
     };
 
     const FALLIBLE: Op = Op {
+        kind: OpKind::Function,
         name: "checked",
         doc: None,
         export_name: Some("checked_alias"),
@@ -298,6 +303,7 @@ mod tests {
         name: "Hello",
         doc: None,
         ops: &[GREET, FALLIBLE],
+        handle: false,
     };
     const SURFACE: Surface = Surface {
         name: "demo",

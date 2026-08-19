@@ -90,6 +90,32 @@ try {
   console.log("  ok   an unknown variant is rejected");
 }
 
+console.log("handles: state that lives across calls");
+const c = new hello.Counter();
+check("starts empty", c.total(), 0);
+c.add(10);
+c.add(6);
+check("state persisted across calls", c.total(), 16);
+check("and was counted", c.steps(), 2);
+check("halve", c.halve(), 8);
+
+console.log("two handles are independent objects");
+const a = new hello.Counter(), b = new hello.Counter();
+a.add(1);
+check("a moved", a.total(), 1);
+check("b did not", b.total(), 0);
+
+console.log("an alternate constructor is a factory");
+const d = hello.Counter.startingAt(100);
+check("started at 100", d.total(), 100);
+try {
+  hello.Counter.startingAt(-1);
+  console.log("  FAIL negative should have thrown");
+  failures++;
+} catch (e) {
+  check("negative throws", e.message, "-1 is negative");
+}
+
 if (failures) {
   console.log(`\n${failures} failure(s)`);
   process.exit(1);

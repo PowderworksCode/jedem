@@ -134,3 +134,50 @@ pub fn is_settled(r: Ripeness) -> bool {
 pub fn maybe(present: bool) -> Option<Ripeness> {
     hello::ripeness::maybe(present).map(|v| v.into())
 }
+
+// ---- Counter ----
+
+#[napi]
+pub struct Counter {
+    inner: hello::Counter,
+}
+
+#[napi]
+impl Counter {
+    /// Start at zero.
+    #[napi(constructor)]
+    pub fn new() -> Self {
+        Self { inner: hello::Counter::new() }
+    }
+
+    /// Start at a given value, refusing a negative one.
+    #[napi(factory, js_name = "startingAt")]
+    pub fn starting_at(start: i64) -> napi::Result<Self> {
+        Ok(Self { inner: hello::Counter::starting_at(start).map_err(err)? })
+    }
+
+    /// Add to the tally. State persists across calls — that is the point.
+    #[napi(js_name = "add")]
+    pub fn add(&mut self, n: i64) {
+        self.inner.add(n);
+    }
+
+    /// The running total.
+    #[napi(js_name = "total")]
+    pub fn total(&self) -> i64 {
+        self.inner.total()
+    }
+
+    /// How many times `add` has been called.
+    #[napi(js_name = "steps")]
+    pub fn steps(&self) -> i64 {
+        self.inner.steps()
+    }
+
+    /// Halve the total, refusing an odd one.
+    #[napi(js_name = "halve")]
+    pub fn halve(&mut self) -> napi::Result<i64> {
+        self.inner.halve().map_err(err)
+    }
+
+}

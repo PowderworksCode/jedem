@@ -26,11 +26,31 @@ pub struct Interface {
     pub name: &'static str,
     pub doc: Option<&'static str>,
     pub ops: &'static [Op],
+    /// True when this is a **handle**: a live object with a constructor and
+    /// methods, rather than a namespace of free functions.
+    ///
+    /// A handle is what lets state live across calls. Without one, an
+    /// incremental API has to be flattened into functions that re-do their work
+    /// from the beginning every time.
+    pub handle: bool,
 }
 
 /// One exported function.
+/// What kind of thing an op is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpKind {
+    /// A free function, or an associated function with no receiver.
+    Function,
+    /// Builds the handle. `Self` or `Result<Self, E>`.
+    Ctor,
+    /// Takes `&self` or `&mut self`.
+    Method { mutable: bool },
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Op {
+    /// Function, constructor, or method — see [`OpKind`].
+    pub kind: OpKind,
     /// The Rust function name.
     pub name: &'static str,
     pub doc: Option<&'static str>,
