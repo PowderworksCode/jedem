@@ -90,6 +90,50 @@ try {
   console.log("  ok   an unknown variant is rejected");
 }
 
+console.log("a Rust move-builder chains the same way here");
+// `withTotal` takes `self` and returns `Self` in Rust. Nothing about it was
+// annotated or reshaped -- the binding mutates in place and returns `this`, so
+// the chain reads the way the Rust one does, and the way JS builders do.
+const chained = new hello.Counter().withTotal(10);
+failures += check("builder set the value", chained.total(), 10);
+failures += check("and it is one object", chained.withTotal(20).total(), 20);
+const built = new hello.Counter();
+const same = built.withTotal(5);
+failures += check("returns the same handle, not a copy", same === built, true);
+built.add(1);
+failures += check("so mutations land on both names", same.total(), 6);
+
+console.log("a width that is not the boundary width");
+// `takeSteps(usize) -> usize` crosses as i64 both ways, cast at the call site.
+const stepper = new hello.Counter();
+failures += check("usize in, usize out", stepper.takeSteps(3), 3);
+
+console.log("handles: state that lives across calls");
+const c = new hello.Counter();
+check("starts empty", c.total(), 0);
+c.add(10);
+c.add(6);
+check("state persisted across calls", c.total(), 16);
+check("and was counted", c.steps(), 2);
+check("halve", c.halve(), 8);
+
+console.log("two handles are independent objects");
+const a = new hello.Counter(), b = new hello.Counter();
+a.add(1);
+check("a moved", a.total(), 1);
+check("b did not", b.total(), 0);
+
+console.log("an alternate constructor is a factory");
+const d = hello.Counter.startingAt(100);
+check("started at 100", d.total(), 100);
+try {
+  hello.Counter.startingAt(-1);
+  console.log("  FAIL negative should have thrown");
+  failures++;
+} catch (e) {
+  check("negative throws", e.message, "-1 is negative");
+}
+
 if (failures) {
   console.log(`\n${failures} failure(s)`);
   process.exit(1);

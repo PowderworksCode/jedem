@@ -25,10 +25,11 @@ fn exported_functions_are_ordinary_rust() {
 fn the_descriptor_describes_what_was_written() {
     assert_eq!(JEDEM_SURFACE.name, "hello");
     assert_eq!(JEDEM_SURFACE.version, "0.1.0");
-    // A type and two modules, to prove `api:` takes every form.
-    assert_eq!(JEDEM_SURFACE.interfaces.len(), 3);
+    // Two types and two modules, to prove `api:` takes every form -- including
+    // a handle (`Counter`) alongside plain namespaces.
+    assert_eq!(JEDEM_SURFACE.interfaces.len(), 4);
     let names: Vec<&str> = JEDEM_SURFACE.interfaces.iter().map(|i| i.name).collect();
-    assert_eq!(names, ["Hello", "fallible", "ripeness"]);
+    assert_eq!(names, ["Hello", "fallible", "ripeness", "Counter"]);
 
     let iface = JEDEM_SURFACE.interfaces[0];
     assert_eq!(iface.name, "Hello");
@@ -83,5 +84,59 @@ fn doc_comments_and_pinned_names_are_captured() {
         by("greet").export_name,
         None,
         "unpinned keeps the Rust name"
+    );
+}
+
+#[test]
+fn a_skipped_method_stays_rust_only() {
+    let mut c = hello::Counter::new();
+    c.add(7);
+    // Callable from Rust exactly as written...
+    assert_eq!(c.into_total(), 7);
+
+    // ...and absent from the surface, so no backend has to lower it.
+    let counter = JEDEM_SURFACE
+        .interfaces
+        .iter()
+        .find(|i| i.name == "Counter")
+        .unwrap();
+    assert!(counter.handle);
+    let names: Vec<&str> = counter.ops.iter().map(|o| o.name).collect();
+    assert!(!names.contains(&"into_total"), "got {names:?}");
+    assert_eq!(
+        names,
+        [
+            "new",
+            "starting_at",
+            "with_total",
+            "add",
+            "total",
+            "steps",
+            "take_steps",
+            "halve"
+        ]
+    );
+}
+
+#[test]
+fn a_builder_is_classified_as_one_and_stays_a_builder_in_rust() {
+    // Unannotated, unchanged, and still the ordinary Rust move-builder.
+    let c = hello::Counter::new().with_total(10);
+    assert_eq!(c.total(), 10);
+
+    let counter = JEDEM_SURFACE
+        .interfaces
+        .iter()
+        .find(|i| i.name == "Counter")
+        .unwrap();
+    let op = counter
+        .ops
+        .iter()
+        .find(|o| o.name == "with_total")
+        .expect("with_total is exported without any annotation on it");
+    assert_eq!(op.kind, jedem::OpKind::Builder);
+    assert!(
+        counter.consuming,
+        "a handle with a builder has to move its value out, so it stores an Option"
     );
 }

@@ -80,6 +80,8 @@ fn expand_fn(f: &ItemFn) -> syn::Result<proc_macro2::TokenStream> {
                 name: #name,
                 doc: #doc,
                 ops: &[#op],
+                handle: false,
+                consuming: false,
             };
         }
     })
@@ -119,6 +121,8 @@ fn expand_mod(m: &ItemMod) -> syn::Result<proc_macro2::TokenStream> {
             name: #mod_name,
             doc: #doc,
             ops: &[#(#ops),*],
+            handle: false,
+            consuming: false,
         };
     };
     if let Some((_, items)) = &mut cleaned.content {
@@ -177,12 +181,31 @@ fn expand_export(input: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
     for item in &input.items {
         let ImplItem::Fn(f) = item else { continue };
         if let Some(FnArg::Receiver(r)) = f.sig.inputs.first() {
-            return Err(syn::Error::new(
-                r.span(),
-                "jedem v1 exports functions that take and return plain values; \
-                 a method with `self` needs a handle, which is not in v1 yet. \
-                 Make it an associated function, or remove it from the exported impl.",
-            ));
+            // A builder -- `self` in, `Self` out -- is fine: it names the same
+            // object, so backends mutate in place. Anything else that takes
+            // `self` by value destroys the handle while the other language is
+            // still holding it, and there is no honest lowering for that.
+            if r.reference.is_none() && !has_skip(&f.attrs)? && !returns_self_bare(&f.sig.output) {
+                let msg = if returns_self(&f.sig.output) {
+                    // `Result<Self, E>` has no sound lowering: on the error path
+                    // Rust has already consumed the value and hands nothing back,
+                    // so the wrapper is left empty. Every other method would then
+                    // have to answer for an empty handle, turning infallible
+                    // signatures fallible across the whole interface -- a much
+                    // larger change than the builder itself.
+                    "a builder returning `Result<Self, E>` is not supported: when it \
+                     fails, Rust has consumed the value and the handle another \
+                     language holds would be left empty. Return `Self` and report \
+                     the failure some other way, or leave it out with #[jedem(skip)]."
+                } else {
+                    "this method consumes `self` without returning `Self`, which would \
+                     destroy a handle another language still holds. A builder taking \
+                     `self` and returning `Self` is supported and needs no change. \
+                     Otherwise take `&self` or `&mut self`, make it an associated \
+                     function, or leave it out with #[jedem(skip)]."
+                };
+                return Err(syn::Error::new(r.span(), msg));
+            }
         }
         if let Some(op) = lower_fn(&f.sig, &f.attrs, &f.vis, &format!("{type_name}::"))? {
             ops.push(op);
@@ -195,6 +218,35 @@ fn expand_export(input: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
             "#[jedem::export] found no public functions to export",
         ));
     }
+
+    // A handle if anything in the block needs an instance: a method with a
+    // receiver, or a constructor that makes one.
+    let is_handle = input.items.iter().any(|item| {
+        let ImplItem::Fn(f) = item else { return false };
+        if !matches!(f.vis, syn::Visibility::Public(_)) {
+            return false;
+        }
+        if has_skip(&f.attrs).unwrap_or(false) {
+            return false;
+        }
+        matches!(f.sig.inputs.first(), Some(FnArg::Receiver(_)))
+            || matches!(&f.sig.output, ReturnType::Type(_, t)
+                if matches!(unwrap_result(t).unwrap_or(t), Type::Path(p) if p.path.is_ident("Self")))
+    });
+
+    // Does any exported op move out of the wrapper? Only then does the
+    // generated handle need `Option` storage.
+    let is_consuming = input.items.iter().any(|item| {
+        let ImplItem::Fn(f) = item else { return false };
+        if !matches!(f.vis, syn::Visibility::Public(_)) {
+            return false;
+        }
+        if has_skip(&f.attrs).unwrap_or(false) {
+            return false;
+        }
+        matches!(f.sig.inputs.first(), Some(FnArg::Receiver(r)) if r.reference.is_none())
+            && returns_self_bare(&f.sig.output)
+    });
 
     let const_name = format_ident!("JEDEM_INTERFACE");
     let iface_doc = opt_str(doc_of(&input.attrs).as_deref());
@@ -210,6 +262,8 @@ fn expand_export(input: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
                 name: #type_name_lit,
                 doc: #iface_doc,
                 ops: &[#(#ops),*],
+                handle: #is_handle,
+                consuming: #is_consuming,
             };
         }
     })
@@ -336,6 +390,15 @@ fn lower_fn(
     if !matches!(vis, syn::Visibility::Public(_)) {
         return Ok(None);
     }
+    // `#[jedem(skip)]` leaves a method out of the surface.
+    //
+    // An exported impl block is usually most of a type's API, and the parts
+    // jedem cannot lower yet -- or that make no sense across a boundary -- are
+    // the exception. Marking those is less disruptive than splitting the impl
+    // in two, and it keeps the annotation on the original method.
+    if has_skip(attrs)? {
+        return Ok(None);
+    }
     if sig.asyncness.is_some() {
         return Err(syn::Error::new(
             sig.asyncness.span(),
@@ -346,6 +409,27 @@ fn lower_fn(
     let name = sig.ident.to_string();
     let doc = doc_of(attrs);
     let export_name = export_name_of(attrs)?;
+
+    // A receiver makes it a method; a `Self` return with no receiver makes it a
+    // constructor. Everything else is a plain function.
+    let receiver = sig.inputs.iter().find_map(|a| match a {
+        FnArg::Receiver(r) => Some(r),
+        _ => None,
+    });
+    let returns_self = returns_self(&sig.output);
+    let kind = match (receiver, returns_self) {
+        // `self` by value returning a bare `Self` is a builder, whatever the
+        // `mut` -- the mutability there is the callee's business.
+        (Some(r), _) if r.reference.is_none() && returns_self_bare(&sig.output) => {
+            quote!(::jedem::OpKind::Builder)
+        }
+        (Some(r), _) => {
+            let mutable = r.mutability.is_some();
+            quote!(::jedem::OpKind::Method { mutable: #mutable })
+        }
+        (None, true) => quote!(::jedem::OpKind::Ctor),
+        (None, false) => quote!(::jedem::OpKind::Function),
+    };
 
     let mut params = Vec::new();
     for arg in &sig.inputs {
@@ -361,32 +445,48 @@ fn lower_fn(
         };
         let ty = lower_type(&pt.ty)?;
         let borrowed = matches!(&*pt.ty, Type::Reference(_));
-        params.push((pname, ty, borrowed));
+        let cast = opt_str(int_cast(&pt.ty).as_deref());
+        params.push((pname, ty, borrowed, cast));
     }
+
+    let returns_cast = match &sig.output {
+        ReturnType::Default => None,
+        ReturnType::Type(_, t) => int_cast(unwrap_result(t).unwrap_or(t)),
+    };
+    let returns_cast = opt_str(returns_cast.as_deref());
 
     let (returns, fallible) = match &sig.output {
         ReturnType::Default => (quote!(::jedem::Type::Unit), false),
-        ReturnType::Type(_, t) => match unwrap_result(t) {
-            Some(inner) => (lower_type(inner)?, true),
-            None => (lower_type(t)?, false),
-        },
+        ReturnType::Type(_, t) => {
+            let inner = unwrap_result(t);
+            let fallible = inner.is_some();
+            let target = inner.unwrap_or(t);
+            if matches!(target, Type::Path(p) if p.path.is_ident("Self")) {
+                // A constructor returns the handle; there is no crossing type.
+                (quote!(::jedem::Type::Unit), fallible)
+            } else {
+                (lower_type(target)?, fallible)
+            }
+        }
     };
 
     let rust_path = format!("{path_prefix}{name}");
     let doc_tok = opt_str(doc.as_deref());
     let export_tok = opt_str(export_name.as_deref());
-    let param_toks = params.iter().map(|(n, t, b)| {
-        quote! { ::jedem::Param { name: #n, ty: #t, borrowed: #b } }
+    let param_toks = params.iter().map(|(n, t, b, c)| {
+        quote! { ::jedem::Param { name: #n, ty: #t, borrowed: #b, cast: #c } }
     });
 
     Ok(Some(quote! {
         ::jedem::Op {
+            kind: #kind,
             name: #name,
             doc: #doc_tok,
             export_name: #export_tok,
             params: &[#(#param_toks),*],
             returns: #returns,
             fallible: #fallible,
+            returns_cast: #returns_cast,
             rust_path: #rust_path,
         }
     }))
@@ -635,4 +735,67 @@ fn is_ident(s: &str) -> bool {
     let mut chars = s.chars();
     matches!(chars.next(), Some(c) if c.is_alphabetic() || c == '_')
         && chars.all(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// Does this item carry `#[jedem(skip)]`?
+fn has_skip(attrs: &[syn::Attribute]) -> syn::Result<bool> {
+    for a in attrs {
+        if !a.path().is_ident("jedem") {
+            continue;
+        }
+        let mut found = false;
+        // `parse_nested_meta` errors on anything it does not recognise, and
+        // `name = "..."` is handled elsewhere, so tolerate it here.
+        let _ = a.parse_nested_meta(|m| {
+            if m.path.is_ident("skip") {
+                found = true;
+            }
+            if m.input.peek(syn::Token![=]) {
+                let _: syn::Expr = m.value()?.parse()?;
+            }
+            Ok(())
+        });
+        if found {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Does this return type name `Self`, bare or inside a `Result`?
+fn returns_self(output: &ReturnType) -> bool {
+    match output {
+        ReturnType::Type(_, t) => {
+            let inner = unwrap_result(t).unwrap_or(t);
+            matches!(inner, Type::Path(p) if p.path.is_ident("Self"))
+        }
+        ReturnType::Default => false,
+    }
+}
+
+/// Does this return type name `Self` directly, with no `Result` around it?
+fn returns_self_bare(output: &ReturnType) -> bool {
+    matches!(output, ReturnType::Type(_, t)
+        if matches!(&**t, Type::Path(p) if p.path.is_ident("Self")))
+}
+
+/// The Rust integer type to cast back to, when several Rust widths share one
+/// boundary type.
+///
+/// `usize`, `u64` and `isize` all cross as `i64` -- that is what Python and
+/// JavaScript have -- but the core still wants its own width, so the call site
+/// casts. `None` when the Rust type already is the boundary type, which is the
+/// common case and emits nothing.
+fn int_cast(t: &Type) -> Option<String> {
+    let t = match t {
+        Type::Reference(r) => &*r.elem,
+        other => other,
+    };
+    let Type::Path(p) = t else { return None };
+    let name = p.path.segments.last()?.ident.to_string();
+    match name.as_str() {
+        "i64" | "i32" | "bool" | "f64" | "String" | "str" => None,
+        "u64" | "usize" | "isize" | "u32" | "i16" | "u16" | "i8" | "f32" => Some(name),
+        _ => None,
+    }
 }

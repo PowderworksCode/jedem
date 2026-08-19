@@ -74,7 +74,7 @@ pub(super) fn scaffold(
                 "{}\n\
                  // napi registers each function at module load, so there is no\n\
                  // module function to write.\n\
-                 mod generated;\n",
+mod generated;\n",
                 generated_marker("//", surface, "node"),
             ),
         },
@@ -92,6 +92,7 @@ pub(super) fn generate(surface: &Surface, core_path: &str) -> String {
 // references them by name and rustc cannot tell they are used.
 #![allow(dead_code)]
 
+use napi::bindgen_prelude::This;
 use napi_derive::napi;
 
 /// A core error surfaces as a thrown JS `Error` carrying its `Display` text --
@@ -102,6 +103,16 @@ fn err(e: impl std::fmt::Display) -> napi::Error {
 }
 "#,
     );
+    if surface.interfaces.iter().any(|i| i.consuming) {
+        out.push_str(
+            r#"
+/// A handle is empty only between a builder taking its value out and putting
+/// it back, so seeing this means that builder panicked. The handle cannot be
+/// repaired -- Rust consumed the value -- so every later call says so.
+const EMPTIED: &str = "this handle was emptied by a builder that panicked";
+"#,
+        );
+    }
 
     // napi's `string_enum` gives TypeScript a string-literal union, which is
     // what a TS developer would have written -- not an opaque number.
@@ -111,12 +122,201 @@ fn err(e: impl std::fmt::Display) -> napi::Error {
 
     for iface in surface.interfaces {
         out.push_str(&format!("\n// ---- {} ----\n\n", iface.name));
+        if iface.handle {
+            out.push_str(&handle_class(iface, core_path));
+            out.push('\n');
+            continue;
+        }
         for op in iface.ops {
             out.push_str(&op_fn(op, core_path));
             out.push('\n');
         }
     }
     out
+}
+
+/// A handle: a napi class owning the core value.
+///
+/// napi class instances are thread-confined, so the class can hold the core
+/// value directly rather than behind a lock.
+fn handle_class(iface: &crate::descriptor::Interface, core_path: &str) -> String {
+    use crate::descriptor::OpKind;
+    let name = iface.name;
+    let mut s = String::new();
+    if let Some(doc) = iface.doc {
+        for line in doc.lines() {
+            if line.is_empty() {
+                s.push_str("///\n");
+            } else {
+                s.push_str(&format!("/// {line}\n"));
+            }
+        }
+    }
+    // A builder has to move the core value out to call, so a handle with one
+    // keeps it in an `Option`. Every other handle holds it directly and pays
+    // nothing -- no accessor, no unwrap -- for a feature it does not use.
+    let (field, wrap, get, get_mut) = if iface.consuming {
+        (
+            format!("Option<{core_path}::{name}>"),
+            "Some(inner)".to_string(),
+            "self.get()".to_string(),
+            "self.get_mut()".to_string(),
+        )
+    } else {
+        (
+            format!("{core_path}::{name}"),
+            "inner".to_string(),
+            "self.inner".to_string(),
+            "self.inner".to_string(),
+        )
+    };
+
+    s.push_str("#[napi]\n");
+    s.push_str(&format!(
+        "pub struct {name} {{\n    inner: {field},\n}}\n\n\
+         impl From<{core_path}::{name}> for {name} {{\n\
+         \x20   fn from(inner: {core_path}::{name}) -> Self {{\n\
+         \x20       Self {{ inner: {wrap} }}\n\
+         \x20   }}\n\
+         }}\n\n"
+    ));
+
+    s.push_str(&format!("#[napi]\nimpl {name} {{\n"));
+
+    for op in iface.ops {
+        if let Some(doc) = op.doc {
+            for line in doc.lines() {
+                if line.is_empty() {
+                    s.push_str("    ///\n");
+                } else {
+                    s.push_str(&format!("    /// {line}\n"));
+                }
+            }
+        }
+        let params: Vec<String> = op
+            .params
+            .iter()
+            .map(|p| format!("{}: {}", p.name, param_ty(p)))
+            .collect();
+        let args: Vec<String> = op.params.iter().map(arg_expr).collect();
+
+        match op.kind {
+            OpKind::Ctor => {
+                // One `constructor` per class; napi spells alternates as
+                // `factory`, which is what an extra `-> Self` op becomes.
+                let primary = op.name == "new";
+                if primary {
+                    s.push_str("    #[napi(constructor)]\n");
+                } else {
+                    s.push_str(&format!(
+                        "    #[napi(factory, js_name = \"{}\")]\n",
+                        js_name(op)
+                    ));
+                }
+                let ret = if op.fallible {
+                    "napi::Result<Self>"
+                } else {
+                    "Self"
+                };
+                s.push_str(&format!(
+                    "    pub fn {}({}) -> {ret} {{\n",
+                    op.name,
+                    params.join(", ")
+                ));
+                let call = format!("{core_path}::{name}::{}({})", op.name, args.join(", "));
+                if op.fallible {
+                    s.push_str(&format!("        Ok({call}.map_err(err)?.into())\n"));
+                } else {
+                    s.push_str(&format!("        {call}.into()\n"));
+                }
+            }
+            OpKind::Method { mutable } => {
+                let recv = if mutable { "&mut self" } else { "&self" };
+                let all = std::iter::once(recv.to_string())
+                    .chain(params.iter().cloned())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                s.push_str(&format!("    #[napi(js_name = \"{}\")]\n", js_name(op)));
+                s.push_str(&format!(
+                    "    pub fn {}({all}){} {{\n",
+                    op.name,
+                    return_clause(op)
+                ));
+                let recv = if mutable { &get_mut } else { &get };
+                let call = format!("{recv}.{}({})", op.name, args.join(", "));
+                s.push_str(&body(op, &call, "        "));
+            }
+            OpKind::Builder => {
+                // The Rust builder consumes `self` and returns `Self`, which
+                // names the same object -- the caller's old binding is dead, so
+                // nothing can tell in-place mutation apart from it. Returning
+                // `this` keeps `new Stream().withX(1).withY(2)` reading the way
+                // the Rust chain does, and the way JS builders normally do.
+                //
+                // `This` is written bare on purpose: napi-derive recognises it
+                // by name against a fixed list, so a qualified path is taken
+                // for an ordinary argument and the class fails to register.
+                s.push_str(&format!("    #[napi(js_name = \"{}\")]\n", js_name(op)));
+                let all = std::iter::once("&mut self".to_string())
+                    .chain(std::iter::once("this: This<'a>".to_string()))
+                    .chain(params.iter().cloned())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                // The lifetime is named rather than elided: with `&mut self`
+                // present, `'_` in return position binds to the receiver, not
+                // to `this`.
+                s.push_str(&format!(
+                    "    pub fn {}<'a>({all}) -> This<'a> {{\n",
+                    op.name
+                ));
+                s.push_str(&format!(
+                    "        let inner = self.inner.take().expect(EMPTIED);\n\
+                     \x20       self.inner = Some(inner.{}({}));\n\
+                     \x20       this\n",
+                    op.name,
+                    args.join(", ")
+                ));
+            }
+            OpKind::Function => {
+                s.push_str(&format!(
+                    "    #[napi(factory, js_name = \"{}\")]\n",
+                    js_name(op)
+                ));
+                s.push_str(&format!(
+                    "    pub fn {}({}) -> {} {{\n",
+                    op.name,
+                    params.join(", "),
+                    return_ty(op)
+                ));
+                let call = format!("{core_path}::{name}::{}({})", op.name, args.join(", "));
+                s.push_str(&body(op, &call, "        "));
+            }
+        }
+        s.push_str("    }\n\n");
+    }
+    // The loop leaves a blank line after the last method; rustfmt would remove
+    // it, so remove it here.
+    while s.ends_with("\n\n") {
+        s.pop();
+    }
+    s.push_str("}\n");
+    // The accessors go after the exported block: napi-derive needs the
+    // `#[napi]` struct and impl to be adjacent, and an unrelated `impl` in
+    // between makes it lose the struct.
+    if iface.consuming {
+        s.push_str(&format!(
+            "impl {name} {{\n\
+             \x20   fn get(&self) -> &{core_path}::{name} {{\n\
+             \x20       self.inner.as_ref().expect(EMPTIED)\n\
+             \x20   }}\n\
+             \x20   fn get_mut(&mut self) -> &mut {core_path}::{name} {{\n\
+             \x20       self.inner.as_mut().expect(EMPTIED)\n\
+             \x20   }}\n\
+             }}\n\n"
+        ));
+    }
+
+    s
 }
 
 /// The exported JS spelling: a pinned name verbatim, otherwise the Rust name
@@ -208,23 +408,34 @@ fn op_fn(op: &Op, core_path: &str) -> String {
 
     // A `Vec<u8>` from the core becomes an owned `Buffer` on the way out; for
     // a fallible op the conversion applies to the payload, not the `Result`.
-    // Bytes become an owned Buffer; an enum becomes the binding-local type,
-    // mapped through any container.
+    s.push_str(&body(op, &call, "    "));
+    s.push_str("}\n");
+    s
+}
+
+/// The body of a call. Bytes become an owned Buffer; an enum becomes the
+/// binding-local type, mapped through any container.
+fn body(op: &Op, call: &str, indent: &str) -> String {
+    // A returned Rust width that is not the boundary width casts on the way
+    // out, the mirror of `Param::cast` on the way in.
+    let call = &match op.returns_cast {
+        Some(_) if op.fallible => format!("{call}.map(|v| v as i64)"),
+        Some(_) => format!("({call}) as i64"),
+        None => call.to_string(),
+    };
     let conv = if op.returns == Type::Bytes {
         Some(".into()".to_string())
     } else {
         super::convert(&op.returns)
     };
-    s.push_str(&match (op.fallible, op.returns, conv) {
-        (true, Type::Unit, _) => format!("    {call}.map_err(err)?;\n    Ok(())\n"),
-        (true, _, Some(c)) => format!("    {call}.map(|v| v{c}).map_err(err)\n"),
-        (true, _, None) => format!("    {call}.map_err(err)\n"),
-        (false, Type::Unit, _) => format!("    {call};\n"),
-        (false, _, Some(c)) => format!("    {call}{c}\n"),
-        (false, _, None) => format!("    {call}\n"),
-    });
-    s.push_str("}\n");
-    s
+    match (op.fallible, op.returns, conv) {
+        (true, Type::Unit, _) => format!("{indent}{call}.map_err(err)?;\n{indent}Ok(())\n"),
+        (true, _, Some(c)) => format!("{indent}{call}.map(|v| v{c}).map_err(err)\n"),
+        (true, _, None) => format!("{indent}{call}.map_err(err)\n"),
+        (false, Type::Unit, _) => format!("{indent}{call};\n"),
+        (false, _, Some(c)) => format!("{indent}{call}{c}\n"),
+        (false, _, None) => format!("{indent}{call}\n"),
+    }
 }
 
 /// How the parameter is spelled in the generated napi signature.
@@ -243,6 +454,11 @@ fn param_ty(p: &Param) -> String {
 fn arg_expr(p: &Param) -> String {
     if let Some(c) = super::convert(&p.ty) {
         return format!("{}{c}", p.name);
+    }
+    // Several Rust widths cross as one boundary type; the core wants its own
+    // back.
+    if let Some(cast) = p.cast {
+        return format!("{} as {cast}", p.name);
     }
     match (p.ty, p.borrowed) {
         // `Uint8Array` derefs to `[u8]`, so a borrow reaches a `&[u8]` core.
@@ -277,5 +493,15 @@ fn return_ty(op: &Op) -> String {
         format!("napi::Result<{inner}>")
     } else {
         inner
+    }
+}
+
+/// The ` -> T` clause, or nothing at all for an infallible unit
+/// return -- `-> ()` is noise a hand-written binding would not have.
+fn return_clause(op: &Op) -> String {
+    if !op.fallible && op.returns == Type::Unit {
+        String::new()
+    } else {
+        format!(" -> {}", return_ty(op))
     }
 }

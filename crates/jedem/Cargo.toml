@@ -3,6 +3,7 @@ name = "jedem"
 description = "Expose a Rust function once; call it from every language, with its shape intact."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

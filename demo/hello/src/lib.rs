@@ -120,7 +120,7 @@ pub mod ripeness {
 jedem::surface! {
     name: "hello",
     version: "0.1.0",
-    api: [Hello, fallible, ripeness],
+    api: [Hello, fallible, ripeness, Counter],
     // With `bindings:` the surface owns generation: no generator bin, no
     // drift-guard test to write. `cargo test` checks the committed bindings;
     // `JEDEM_WRITE=1 cargo test` rewrites them.
@@ -154,5 +154,97 @@ pub mod fallible {
             return Err(super::EmptyName);
         }
         Ok(text.to_string())
+    }
+}
+
+/// A running tally — the smallest thing that needs state to live across calls.
+///
+/// Without handles this had to be flattened into functions that recomputed from
+/// scratch every time. With them, the object itself crosses the boundary.
+pub struct Counter {
+    total: i64,
+    steps: i64,
+}
+
+#[jedem::export]
+impl Counter {
+    /// Start at zero.
+    pub fn new() -> Self {
+        Counter { total: 0, steps: 0 }
+    }
+
+    /// Start at a given value, refusing a negative one.
+    pub fn starting_at(start: i64) -> Result<Self, String> {
+        if start < 0 {
+            return Err(format!("{start} is negative"));
+        }
+        Ok(Counter {
+            total: start,
+            steps: 0,
+        })
+    }
+
+    /// Start the tally somewhere other than zero.
+    ///
+    /// An ordinary Rust builder, unannotated and unchanged. It consumes `self`
+    /// and returns `Self`, which names the same object -- so the bindings
+    /// mutate in place and hand the same handle back, and the chain reads the
+    /// same in every language.
+    pub fn with_total(mut self, total: i64) -> Self {
+        self.total = total;
+        self
+    }
+
+    /// Add to the tally. State persists across calls — that is the point.
+    pub fn add(&mut self, n: i64) {
+        self.total += n;
+        self.steps += 1;
+    }
+
+    /// The running total.
+    pub fn total(&self) -> i64 {
+        self.total
+    }
+
+    /// How many times `add` has been called.
+    pub fn steps(&self) -> i64 {
+        self.steps
+    }
+
+    /// Consume the counter and hand back its total.
+    ///
+    /// Taking `self` by value is meaningless across a language boundary -- the
+    /// other side still holds the handle -- so this stays Rust-only. Without
+    /// the marker, exporting this impl would be a compile error.
+    #[jedem(skip)]
+    pub fn into_total(self) -> i64 {
+        self.total
+    }
+
+    /// A width that is not the boundary width.
+    ///
+    /// `usize` crosses as `i64`, because that is what Python and JavaScript
+    /// have, and is cast back at the call site -- in both directions. Nothing
+    /// about this signature had to change to say so.
+    pub fn take_steps(&mut self, n: usize) -> usize {
+        for _ in 0..n {
+            self.add(1);
+        }
+        self.steps as usize
+    }
+
+    /// Halve the total, refusing an odd one.
+    pub fn halve(&mut self) -> Result<i64, String> {
+        if self.total % 2 != 0 {
+            return Err(format!("{} is odd", self.total));
+        }
+        self.total /= 2;
+        Ok(self.total)
+    }
+}
+
+impl Default for Counter {
+    fn default() -> Self {
+        Self::new()
     }
 }

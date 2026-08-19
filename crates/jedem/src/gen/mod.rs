@@ -225,11 +225,12 @@ pub(crate) fn banner(surface: &Surface, target: &str) -> String {
 
 #[cfg(test)]
 pub(crate) mod tests_support {
-    use crate::descriptor::{Interface, Op, Param, Surface, Type};
+    use crate::descriptor::{Interface, Op, OpKind, Param, Surface, Type};
 
     /// A surface exercising a doc comment with a blank line, a pinned export
     /// name, a fallible op and a borrowed param.
     pub const GREET: Op = Op {
+        kind: OpKind::Function,
         name: "greet",
         doc: Some("Greet.\n\nWith a blank line, which is where trailing\nwhitespace creeps in."),
         export_name: None,
@@ -237,19 +238,23 @@ pub(crate) mod tests_support {
             name: "name",
             ty: Type::Str,
             borrowed: true,
+            cast: None,
         }],
         returns: Type::Str,
         fallible: false,
+        returns_cast: None,
         rust_path: "Hello::greet",
     };
 
     pub const FALLIBLE: Op = Op {
+        kind: OpKind::Function,
         name: "checked",
         doc: None,
         export_name: Some("checked_alias"),
         params: &[],
         returns: Type::Unit,
         fallible: true,
+        returns_cast: None,
         rust_path: "Hello::checked",
     };
 
@@ -257,20 +262,99 @@ pub(crate) mod tests_support {
         name: "Hello",
         doc: None,
         ops: &[GREET, FALLIBLE],
+        handle: false,
+        consuming: false,
     };
+    /// A handle, whose generated constructor is the construct where the
+    /// generator most easily drifts from rustfmt: a struct literal long enough
+    /// to pass `struct_lit_width` gets broken across lines.
+    pub const CTOR: Op = Op {
+        kind: OpKind::Ctor,
+        name: "new",
+        doc: Some("Start at zero."),
+        export_name: None,
+        params: &[],
+        returns: Type::Unit,
+        fallible: false,
+        returns_cast: None,
+        rust_path: "Counter::new",
+    };
+
+    pub const FALLIBLE_CTOR: Op = Op {
+        kind: OpKind::Ctor,
+        name: "starting_at",
+        doc: None,
+        export_name: None,
+        params: &[Param {
+            name: "start",
+            ty: Type::I64,
+            borrowed: false,
+            cast: None,
+        }],
+        returns: Type::Unit,
+        fallible: true,
+        returns_cast: None,
+        rust_path: "Counter::starting_at",
+    };
+
+    pub const BUMP: Op = Op {
+        kind: OpKind::Method { mutable: true },
+        name: "add",
+        doc: None,
+        export_name: None,
+        params: &[Param {
+            name: "n",
+            ty: Type::I64,
+            borrowed: false,
+            cast: None,
+        }],
+        returns: Type::Unit,
+        fallible: false,
+        returns_cast: None,
+        rust_path: "Counter::add",
+    };
+
+    /// A builder: `self` in, `Self` out. The construct this whole path exists
+    /// for, and the one that makes the wrapper hold an `Option`.
+    pub const BUILD: Op = Op {
+        kind: OpKind::Builder,
+        name: "with_total",
+        doc: None,
+        export_name: None,
+        params: &[Param {
+            name: "total",
+            ty: Type::I64,
+            borrowed: false,
+            cast: None,
+        }],
+        returns: Type::Unit,
+        fallible: false,
+        returns_cast: None,
+        rust_path: "Counter::with_total",
+    };
+
+    pub const HANDLE: Interface = Interface {
+        name: "Counter",
+        doc: Some("A live counter."),
+        ops: &[CTOR, FALLIBLE_CTOR, BUMP, BUILD],
+        handle: true,
+        consuming: true,
+    };
+
     pub const SURFACE: Surface = Surface {
         name: "demo",
         version: "9.9.9",
-        interfaces: &[&IFACE],
+        interfaces: &[&IFACE, &HANDLE],
     };
 }
 
 #[cfg(test)]
 mod tests {
     use super::{generate, Target};
-    use crate::descriptor::{Interface, Op, Param, Surface, Type};
+    use crate::descriptor::{Interface, Op, OpKind, Param, Surface, Type};
 
     const GREET: Op = Op {
+        kind: OpKind::Function,
         name: "greet",
         doc: Some("Greet."),
         export_name: None,
@@ -278,19 +362,23 @@ mod tests {
             name: "name",
             ty: Type::Str,
             borrowed: true,
+            cast: None,
         }],
         returns: Type::Str,
         fallible: false,
+        returns_cast: None,
         rust_path: "Hello::greet",
     };
 
     const FALLIBLE: Op = Op {
+        kind: OpKind::Function,
         name: "checked",
         doc: None,
         export_name: Some("checked_alias"),
         params: &[],
         returns: Type::Unit,
         fallible: true,
+        returns_cast: None,
         rust_path: "Hello::checked",
     };
 
@@ -298,6 +386,8 @@ mod tests {
         name: "Hello",
         doc: None,
         ops: &[GREET, FALLIBLE],
+        handle: false,
+        consuming: false,
     };
     const SURFACE: Surface = Surface {
         name: "demo",
@@ -504,5 +594,75 @@ mod camel {
         assert_eq!(super::lower_camel("reverse_bytes"), "reverseBytes");
         assert_eq!(super::lower_camel("greet"), "greet");
         assert_eq!(super::lower_camel("a_b_c"), "aBC");
+    }
+}
+
+#[cfg(test)]
+mod rustfmt_stability {
+    use super::*;
+
+    /// Generated Rust is already formatted the way rustfmt would format it.
+    ///
+    /// Generated crates are workspace members, so `cargo fmt --all` rewrites
+    /// them like any other source. Every time the generator's layout differed
+    /// from rustfmt's, the next `cargo fmt` silently edited the committed
+    /// bindings and the drift guard failed pointing at the surface -- which
+    /// nobody had touched.
+    ///
+    /// Two ways of opting out are closed. `#![rustfmt::skip]` is a custom inner
+    /// attribute, still unstable, so rustc rejects the file. `#[rustfmt::skip]`
+    /// on the `mod generated;` declaration does work on rustfmt -- and breaks
+    /// napi-derive, which keeps a global registry of the structs it has seen
+    /// and relies on expansion order; the attribute perturbs that order enough
+    /// that every `#[napi] impl` reports its struct as unparsed. So the
+    /// generator agrees with rustfmt instead, and this test holds it to that.
+    ///
+    /// Skipped when rustfmt is not installed, so the suite still runs on a
+    /// toolchain without it.
+    #[test]
+    fn generated_rust_is_already_rustfmt_clean() {
+        let Some(formatted_of) = rustfmt() else {
+            eprintln!("rustfmt not available; skipping");
+            return;
+        };
+        for &target in Target::ALL {
+            for file in generate_crate(&tests_support::SURFACE, target, "demo", "..", "b", "demo") {
+                if !file.path.ends_with(".rs") {
+                    continue;
+                }
+                let formatted = formatted_of(&file.contents);
+                assert_eq!(
+                    file.contents,
+                    formatted,
+                    "\n\n{}/{} is not what rustfmt would write, so `cargo fmt` will \
+                     edit the committed bindings and break the drift guard.\n",
+                    target.dir_name(),
+                    file.path
+                );
+            }
+        }
+    }
+
+    /// A `source -> formatted` function, or `None` if rustfmt is missing.
+    fn rustfmt() -> Option<fn(&str) -> String> {
+        use std::process::{Command, Stdio};
+        Command::new("rustfmt").arg("--version").output().ok()?;
+        fn run(src: &str) -> String {
+            use std::io::Write;
+            let mut c = Command::new("rustfmt")
+                .args(["--emit", "stdout", "--edition", "2021", "--quiet"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("spawn rustfmt");
+            c.stdin
+                .take()
+                .unwrap()
+                .write_all(src.as_bytes())
+                .expect("write to rustfmt");
+            let out = c.wait_with_output().expect("rustfmt");
+            String::from_utf8(out.stdout).expect("utf-8")
+        }
+        Some(run)
     }
 }

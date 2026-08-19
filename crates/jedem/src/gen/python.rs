@@ -46,7 +46,7 @@ pub(super) fn scaffold(
             path: "src/lib.rs".into(),
             contents: format!(
                 "{}\n\
-                 mod generated;\n\n\
+mod generated;\n\n\
                  #[pyo3::pymodule]\n\
                  fn {module}(m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {{\n\
                  \x20   generated::register(m)\n\
@@ -76,6 +76,16 @@ fn err(e: impl std::fmt::Display) -> PyErr {
 }
 "#,
     );
+    if surface.interfaces.iter().any(|i| i.consuming) {
+        out.push_str(
+            r#"
+/// A handle is empty only between a builder taking its value out and putting
+/// it back, so seeing this means that builder panicked. The handle cannot be
+/// repaired -- Rust consumed the value -- so every later call says so.
+const EMPTIED: &str = "this handle was emptied by a builder that panicked";
+"#,
+        );
+    }
 
     // Declare every enum the surface reaches, once, with conversions to and
     // from the core's own type. Python gets a real class, not a magic string.
@@ -84,8 +94,19 @@ fn err(e: impl std::fmt::Display) -> PyErr {
     }
 
     let mut registrations = Vec::new();
+    let mut classes: Vec<String> = super::enums_in(surface)
+        .iter()
+        .map(|d| d.name.to_string())
+        .collect();
+
     for iface in surface.interfaces {
         out.push_str(&format!("\n// ---- {} ----\n\n", iface.name));
+        if iface.handle {
+            out.push_str(&handle_class(iface, core_path));
+            out.push('\n');
+            classes.push(iface.name.to_string());
+            continue;
+        }
         for op in iface.ops {
             let exported = op.export_name.unwrap_or(op.name);
             out.push_str(&op_fn(op, exported, core_path));
@@ -94,11 +115,11 @@ fn err(e: impl std::fmt::Display) -> PyErr {
         }
     }
 
-    // Enum classes have to be added too, or Python sees the functions but not
-    // the type their values belong to.
-    let classes: String = super::enums_in(surface)
+    // Classes have to be added too, or Python sees the functions but not the
+    // types their values belong to.
+    let classes: String = classes
         .iter()
-        .map(|d| format!("    m.add_class::<{}>()?;\n", d.name))
+        .map(|n| format!("    m.add_class::<{n}>()?;\n"))
         .collect();
     out.push_str(&format!(
         "/// Register everything on the module. Call this from your `#[pymodule]`.\npub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {{\n{classes}{}    Ok(())\n}}\n",
@@ -158,6 +179,201 @@ fn enum_decl(def: &crate::descriptor::EnumDef, core_path: &str) -> String {
     s
 }
 
+/// A handle: a live object holding the core value.
+///
+/// The binding crate depends on the core crate, so the class can simply own a
+/// `core::Thing` — there is no need for the trait-and-`Arc` indirection a
+/// generator needs when the declared surface is separate from the code that
+/// implements it.
+fn handle_class(iface: &crate::descriptor::Interface, core_path: &str) -> String {
+    use crate::descriptor::OpKind;
+    let name = iface.name;
+    let mut s = String::new();
+    if let Some(doc) = iface.doc {
+        for line in doc.lines() {
+            if line.is_empty() {
+                s.push_str("///\n");
+            } else {
+                s.push_str(&format!("/// {line}\n"));
+            }
+        }
+    }
+
+    // A builder has to move the core value out to call, so a handle with one
+    // keeps it in an `Option`. Every other handle holds it directly and pays
+    // nothing -- no accessor, no unwrap -- for a feature it does not use.
+    let (field, wrap, get, get_mut) = if iface.consuming {
+        (
+            format!("Option<{core_path}::{name}>"),
+            "Some(inner)".to_string(),
+            "self.get()".to_string(),
+            "self.get_mut()".to_string(),
+        )
+    } else {
+        (
+            format!("{core_path}::{name}"),
+            "inner".to_string(),
+            "self.inner".to_string(),
+            "self.inner".to_string(),
+        )
+    };
+
+    s.push_str("#[pyclass]\n");
+    // Wrapping goes through `From` rather than a struct literal at each
+    // constructor. `Self { inner }` is short enough that rustfmt leaves it on
+    // one line, whereas `Self { inner: some::long::Path::new() }` passes
+    // `struct_lit_width` and gets broken across four -- output the generator
+    // would have to predict to stay `cargo fmt` clean.
+    s.push_str(&format!(
+        "pub struct {name} {{\n    inner: {field},\n}}\n\n\
+         impl From<{core_path}::{name}> for {name} {{\n\
+         \x20   fn from(inner: {core_path}::{name}) -> Self {{\n\
+         \x20       Self {{ inner: {wrap} }}\n\
+         \x20   }}\n\
+         }}\n\n"
+    ));
+
+    s.push_str(&format!("#[pymethods]\nimpl {name} {{\n"));
+
+    for op in iface.ops {
+        let exported = op.export_name.unwrap_or(op.name);
+        if let Some(doc) = op.doc {
+            for line in doc.lines() {
+                if line.is_empty() {
+                    s.push_str("    ///\n");
+                } else {
+                    s.push_str(&format!("    /// {line}\n"));
+                }
+            }
+        }
+        let params: Vec<String> = op
+            .params
+            .iter()
+            .map(|p| format!("{}: {}", p.name, param_ty(&p.ty, p.borrowed)))
+            .collect();
+        let args: Vec<String> = op
+            .params
+            .iter()
+            .map(|p| match (super::convert(&p.ty), p.cast) {
+                (Some(c), _) => format!("{}{c}", p.name),
+                // Several Rust widths cross as one boundary type; the core
+                // wants its own back.
+                (None, Some(cast)) => format!("{} as {cast}", p.name),
+                (None, None) => p.name.to_string(),
+            })
+            .collect();
+
+        match op.kind {
+            OpKind::Ctor => {
+                // Python has one `__new__`. The op actually called `new` gets
+                // it; any other constructor becomes a static factory, which is
+                // how alternate constructors are spelled in Python anyway.
+                let primary = op.name == "new";
+                if primary {
+                    s.push_str("    #[new]\n");
+                } else {
+                    s.push_str("    #[staticmethod]\n");
+                }
+                let ret = if op.fallible {
+                    "PyResult<Self>"
+                } else {
+                    "Self"
+                };
+                s.push_str(&format!(
+                    "    fn {}({}) -> {ret} {{\n",
+                    if primary { "new" } else { exported },
+                    params.join(", ")
+                ));
+                let call = format!("{core_path}::{name}::{}({})", op.name, args.join(", "));
+                if op.fallible {
+                    s.push_str(&format!("        Ok({call}.map_err(err)?.into())\n"));
+                } else {
+                    s.push_str(&format!("        {call}.into()\n"));
+                }
+            }
+            OpKind::Builder => {
+                // The Rust builder consumes `self` and returns `Self`, which
+                // names the same object -- the caller's old binding is dead, so
+                // nothing can tell in-place mutation apart from it. Handing the
+                // same handle back keeps `Stream().with_x(1).with_y(2)`
+                // reading exactly as it does in Rust.
+                if exported != op.name {
+                    s.push_str(&format!("    #[pyo3(name = \"{exported}\")]\n"));
+                }
+                let all = std::iter::once("mut slf: PyRefMut<'_, Self>".to_string())
+                    .chain(params.iter().cloned())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                s.push_str(&format!(
+                    "    fn {exported}({all}) -> PyRefMut<'_, Self> {{\n"
+                ));
+                s.push_str(&format!(
+                    "        let inner = slf.inner.take().expect(EMPTIED);\n\
+                     \x20       slf.inner = Some(inner.{}({}));\n\
+                     \x20       slf\n",
+                    op.name,
+                    args.join(", ")
+                ));
+            }
+            OpKind::Method { mutable } => {
+                let recv = if mutable { "&mut self" } else { "&self" };
+                let all = std::iter::once(recv.to_string())
+                    .chain(params.iter().cloned())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if exported != op.name {
+                    s.push_str(&format!("    #[pyo3(name = \"{exported}\")]\n"));
+                }
+                s.push_str(&format!(
+                    "    fn {}({all}){} {{\n",
+                    exported,
+                    return_clause(op)
+                ));
+                let recv = if mutable { &get_mut } else { &get };
+                let call = format!("{recv}.{}({})", op.name, args.join(", "));
+                s.push_str(&body(op, &call, "        "));
+            }
+            OpKind::Function => {
+                s.push_str("    #[staticmethod]\n");
+                s.push_str(&format!(
+                    "    fn {}({}) -> {} {{\n",
+                    exported,
+                    params.join(", "),
+                    return_ty(op)
+                ));
+                let call = format!("{core_path}::{name}::{}({})", op.name, args.join(", "));
+                s.push_str(&body(op, &call, "        "));
+            }
+        }
+        s.push_str("    }\n\n");
+    }
+    // The loop leaves a blank line after the last method; rustfmt would remove
+    // it, so remove it here.
+    while s.ends_with("\n\n") {
+        s.pop();
+    }
+    s.push_str("}\n");
+    // The accessors go after the exported block, matching node -- where
+    // napi-derive needs the `#[napi]` struct and impl adjacent.
+    if iface.consuming {
+        // Empty only between a builder taking the value and putting it back,
+        // which is not observable unless that builder panicked -- in which case
+        // the panic is the error, and this message says why the handle is now
+        // unusable.
+        s.push_str(&format!(
+            "impl {name} {{\n\
+             \x20   fn get(&self) -> &{core_path}::{name} {{\n\
+             \x20       self.inner.as_ref().expect(EMPTIED)\n\
+             \x20   }}\n\
+             \x20   fn get_mut(&mut self) -> &mut {core_path}::{name} {{\n\
+             \x20       self.inner.as_mut().expect(EMPTIED)\n\
+             \x20   }}\n\
+             }}\n\n"
+        ));
+    }
+    s
+}
+
 fn op_fn(op: &Op, exported: &str, core_path: &str) -> String {
     let mut s = String::new();
     if let Some(doc) = op.doc {
@@ -180,9 +396,10 @@ fn op_fn(op: &Op, exported: &str, core_path: &str) -> String {
     let args: Vec<String> = op
         .params
         .iter()
-        .map(|p| match super::convert(&p.ty) {
-            Some(c) => format!("{}{c}", p.name),
-            None => p.name.to_string(),
+        .map(|p| match (super::convert(&p.ty), p.cast) {
+            (Some(c), _) => format!("{}{c}", p.name),
+            (None, Some(cast)) => format!("{} as {cast}", p.name),
+            (None, None) => p.name.to_string(),
         })
         .collect();
 
@@ -198,19 +415,30 @@ fn op_fn(op: &Op, exported: &str, core_path: &str) -> String {
     ));
 
     let call = format!("{}::{}({})", core_path, op.rust_path, args.join(", "));
-    // An enum crosses as the binding-local type; `From` bridges it, mapped
-    // through any container.
-    let conv = super::convert(&op.returns);
-    s.push_str(&match (op.fallible, op.returns, conv) {
-        (true, Type::Unit, _) => format!("    {call}.map_err(err)?;\n    Ok(())\n"),
-        (true, _, Some(c)) => format!("    {call}.map(|v| v{c}).map_err(err)\n"),
-        (true, _, None) => format!("    {call}.map_err(err)\n"),
-        (false, Type::Unit, _) => format!("    {call};\n"),
-        (false, _, Some(c)) => format!("    {call}{c}\n"),
-        (false, _, None) => format!("    {call}\n"),
-    });
+    s.push_str(&body(op, &call, "    "));
     s.push_str("}\n");
     s
+}
+
+/// The body of a call: convert an enum through any container, and map the error
+/// into this language's failure mechanism.
+fn body(op: &Op, call: &str, indent: &str) -> String {
+    // A returned Rust width that is not the boundary width casts on the way
+    // out, the mirror of `Param::cast` on the way in.
+    let call = &match op.returns_cast {
+        Some(_) if op.fallible => format!("{call}.map(|v| v as i64)"),
+        Some(_) => format!("({call}) as i64"),
+        None => call.to_string(),
+    };
+    let conv = super::convert(&op.returns);
+    match (op.fallible, op.returns, conv) {
+        (true, Type::Unit, _) => format!("{indent}{call}.map_err(err)?;\n{indent}Ok(())\n"),
+        (true, _, Some(c)) => format!("{indent}{call}.map(|v| v{c}).map_err(err)\n"),
+        (true, _, None) => format!("{indent}{call}.map_err(err)\n"),
+        (false, Type::Unit, _) => format!("{indent}{call};\n"),
+        (false, _, Some(c)) => format!("{indent}{call}{c}\n"),
+        (false, _, None) => format!("{indent}{call}\n"),
+    }
 }
 
 /// A parameter's Rust spelling in the generated signature.
@@ -250,5 +478,15 @@ fn return_ty(op: &Op) -> String {
         format!("PyResult<{inner}>")
     } else {
         inner
+    }
+}
+
+/// The ` -> T` clause, or nothing at all for an infallible unit
+/// return -- `-> ()` is noise a hand-written binding would not have.
+fn return_clause(op: &Op) -> String {
+    if !op.fallible && op.returns == Type::Unit {
+        String::new()
+    } else {
+        format!(" -> {}", return_ty(op))
     }
 }

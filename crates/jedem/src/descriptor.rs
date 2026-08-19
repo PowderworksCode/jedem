@@ -26,11 +26,46 @@ pub struct Interface {
     pub name: &'static str,
     pub doc: Option<&'static str>,
     pub ops: &'static [Op],
+    /// True when this is a **handle**: a live object with a constructor and
+    /// methods, rather than a namespace of free functions.
+    ///
+    /// A handle is what lets state live across calls. Without one, an
+    /// incremental API has to be flattened into functions that re-do their work
+    /// from the beginning every time.
+    pub handle: bool,
+    /// True when some op is an [`OpKind::Builder`], which the wrapper has to
+    /// move out of to call.
+    ///
+    /// Only such a wrapper stores its core value in an `Option`; every other
+    /// handle holds it directly and pays nothing for a feature it does not
+    /// use.
+    pub consuming: bool,
 }
 
 /// One exported function.
+/// What kind of thing an op is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpKind {
+    /// A free function, or an associated function with no receiver.
+    Function,
+    /// Builds the handle. `Self` or `Result<Self, E>`.
+    Ctor,
+    /// Takes `&self` or `&mut self`.
+    Method { mutable: bool },
+    /// A builder: consumes `self` and returns `Self` (or `Result<Self, E>`).
+    ///
+    /// Rust's move semantics make this the same object as the one that went
+    /// in -- the caller's old binding is dead, so nothing can observe the
+    /// difference between "consumed and returned" and "mutated in place".
+    /// Backends therefore lower it to an in-place mutation that hands the
+    /// same handle back, and chaining reads exactly as it does in Rust.
+    Builder,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Op {
+    /// Function, constructor, or method — see [`OpKind`].
+    pub kind: OpKind,
     /// The Rust function name.
     pub name: &'static str,
     pub doc: Option<&'static str>,
@@ -47,6 +82,9 @@ pub struct Op {
     /// signature rather than declared: unlike async-ness, the signature
     /// genuinely reveals it.
     pub fallible: bool,
+    /// The cast applied to the returned value, for the same reason as
+    /// [`Param::cast`] -- in the other direction.
+    pub returns_cast: Option<&'static str>,
     /// Path to call, relative to the crate root — `Jawohl::complete_json`.
     pub rust_path: &'static str,
 }
@@ -63,6 +101,14 @@ pub struct Param {
     /// owned `String` that the call site must re-borrow. Without this the
     /// second backend generates code that does not compile.
     pub borrowed: bool,
+    /// The Rust integer type to cast back to, when it is not the one [`Type`]
+    /// carries.
+    ///
+    /// Several Rust widths share one boundary type -- `usize`, `u64` and
+    /// `isize` all cross as [`Type::I64`], because that is what the target
+    /// languages have. The core still wants its own width back, so the call
+    /// site casts. `None` when the Rust type is already the boundary type.
+    pub cast: Option<&'static str>,
 }
 
 /// A C-like enum crossing the boundary.

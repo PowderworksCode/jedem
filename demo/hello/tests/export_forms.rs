@@ -195,3 +195,60 @@ fn each_language_declares_the_enum_its_own_way() {
         "{node}"
     );
 }
+
+/// Handles: an interface with a constructor and methods.
+#[test]
+fn a_handle_is_classified_as_one() {
+    use jedem::OpKind;
+    let iface = hello::Counter::JEDEM_INTERFACE;
+    assert!(iface.handle, "Counter has a ctor and methods");
+    let by = |n: &str| iface.ops.iter().find(|o| o.name == n).unwrap();
+
+    assert_eq!(by("new").kind, OpKind::Ctor);
+    assert_eq!(
+        by("starting_at").kind,
+        OpKind::Ctor,
+        "-> Result<Self, _> too"
+    );
+    assert_eq!(by("add").kind, OpKind::Method { mutable: true });
+    assert_eq!(by("total").kind, OpKind::Method { mutable: false });
+    assert!(by("halve").fallible);
+}
+
+#[test]
+fn a_namespace_is_not_a_handle() {
+    assert!(!hello::ripeness::JEDEM_INTERFACE.handle);
+    assert!(
+        !hello::Hello::JEDEM_INTERFACE.handle,
+        "no receivers, no ctor"
+    );
+}
+
+#[test]
+fn each_language_gets_one_constructor_and_factories_for_the_rest() {
+    const SURFACE: jedem::Surface = jedem::Surface {
+        name: "h",
+        version: "0.0.0",
+        interfaces: &[hello::Counter::JEDEM_INTERFACE],
+    };
+    let py = jedem::generate(&SURFACE, jedem::Target::Python, "core");
+    assert!(py.contains("#[pyclass]"), "a real class");
+    assert!(
+        py.contains("inner: core::Counter"),
+        "owns the core value directly"
+    );
+    assert_eq!(py.matches("#[new]").count(), 1, "Python has one __new__");
+    assert!(py.contains("#[staticmethod]\n    fn starting_at"), "{py}");
+    assert!(
+        py.contains("fn add(&mut self, n: i64) {"),
+        "no `-> ()` noise: {py}"
+    );
+
+    let node = jedem::generate(&SURFACE, jedem::Target::Node, "core");
+    assert_eq!(node.matches("#[napi(constructor)]").count(), 1);
+    assert!(
+        node.contains("#[napi(factory, js_name = \"startingAt\")]"),
+        "{node}"
+    );
+    assert!(node.contains("pub fn add(&mut self, n: i64) {"), "{node}");
+}

@@ -11,6 +11,7 @@
 // references them by name and rustc cannot tell they are used.
 #![allow(dead_code)]
 
+use napi::bindgen_prelude::This;
 use napi_derive::napi;
 
 /// A core error surfaces as a thrown JS `Error` carrying its `Display` text --
@@ -19,6 +20,11 @@ use napi_derive::napi;
 fn err(e: impl std::fmt::Display) -> napi::Error {
     napi::Error::from_reason(e.to_string())
 }
+
+/// A handle is empty only between a builder taking its value out and putting
+/// it back, so seeing this means that builder panicked. The handle cannot be
+/// repaired -- Rust consumed the value -- so every later call says so.
+const EMPTIED: &str = "this handle was emptied by a builder that panicked";
 /// How far along a value is — the shape jawohl's `Syntax` has, and the reason
 /// enums exist: without them this crossed as a magic string.
 #[napi(string_enum)]
@@ -133,4 +139,87 @@ pub fn is_settled(r: Ripeness) -> bool {
 #[napi(js_name = "maybe")]
 pub fn maybe(present: bool) -> Option<Ripeness> {
     hello::ripeness::maybe(present).map(|v| v.into())
+}
+
+// ---- Counter ----
+
+#[napi]
+pub struct Counter {
+    inner: Option<hello::Counter>,
+}
+
+impl From<hello::Counter> for Counter {
+    fn from(inner: hello::Counter) -> Self {
+        Self { inner: Some(inner) }
+    }
+}
+
+#[napi]
+impl Counter {
+    /// Start at zero.
+    #[napi(constructor)]
+    pub fn new() -> Self {
+        hello::Counter::new().into()
+    }
+
+    /// Start at a given value, refusing a negative one.
+    #[napi(factory, js_name = "startingAt")]
+    pub fn starting_at(start: i64) -> napi::Result<Self> {
+        Ok(hello::Counter::starting_at(start).map_err(err)?.into())
+    }
+
+    /// Start the tally somewhere other than zero.
+    ///
+    /// An ordinary Rust builder, unannotated and unchanged. It consumes `self`
+    /// and returns `Self`, which names the same object -- so the bindings
+    /// mutate in place and hand the same handle back, and the chain reads the
+    /// same in every language.
+    #[napi(js_name = "withTotal")]
+    pub fn with_total<'a>(&mut self, this: This<'a>, total: i64) -> This<'a> {
+        let inner = self.inner.take().expect(EMPTIED);
+        self.inner = Some(inner.with_total(total));
+        this
+    }
+
+    /// Add to the tally. State persists across calls — that is the point.
+    #[napi(js_name = "add")]
+    pub fn add(&mut self, n: i64) {
+        self.get_mut().add(n);
+    }
+
+    /// The running total.
+    #[napi(js_name = "total")]
+    pub fn total(&self) -> i64 {
+        self.get().total()
+    }
+
+    /// How many times `add` has been called.
+    #[napi(js_name = "steps")]
+    pub fn steps(&self) -> i64 {
+        self.get().steps()
+    }
+
+    /// A width that is not the boundary width.
+    ///
+    /// `usize` crosses as `i64`, because that is what Python and JavaScript
+    /// have, and is cast back at the call site -- in both directions. Nothing
+    /// about this signature had to change to say so.
+    #[napi(js_name = "takeSteps")]
+    pub fn take_steps(&mut self, n: i64) -> i64 {
+        (self.get_mut().take_steps(n as usize)) as i64
+    }
+
+    /// Halve the total, refusing an odd one.
+    #[napi(js_name = "halve")]
+    pub fn halve(&mut self) -> napi::Result<i64> {
+        self.get_mut().halve().map_err(err)
+    }
+}
+impl Counter {
+    fn get(&self) -> &hello::Counter {
+        self.inner.as_ref().expect(EMPTIED)
+    }
+    fn get_mut(&mut self) -> &mut hello::Counter {
+        self.inner.as_mut().expect(EMPTIED)
+    }
 }
