@@ -179,12 +179,13 @@ fn expand_export(input: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
     for item in &input.items {
         let ImplItem::Fn(f) = item else { continue };
         if let Some(FnArg::Receiver(r)) = f.sig.inputs.first() {
-            if r.reference.is_none() {
+            if r.reference.is_none() && !has_skip(&f.attrs)? {
                 return Err(syn::Error::new(
                     r.span(),
                     "a method taking `self` by value consumes the handle, which has no \
                      meaning once it is owned by another language. Take `&self` or \
-                     `&mut self`, or make it an associated function.",
+                     `&mut self`, make it an associated function, or leave it out with \
+                     #[jedem(skip)].",
                 ));
             }
         }
@@ -205,6 +206,9 @@ fn expand_export(input: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
     let is_handle = input.items.iter().any(|item| {
         let ImplItem::Fn(f) = item else { return false };
         if !matches!(f.vis, syn::Visibility::Public(_)) {
+            return false;
+        }
+        if has_skip(&f.attrs).unwrap_or(false) {
             return false;
         }
         matches!(f.sig.inputs.first(), Some(FnArg::Receiver(_)))
@@ -351,6 +355,15 @@ fn lower_fn(
     path_prefix: &str,
 ) -> syn::Result<Option<proc_macro2::TokenStream>> {
     if !matches!(vis, syn::Visibility::Public(_)) {
+        return Ok(None);
+    }
+    // `#[jedem(skip)]` leaves a method out of the surface.
+    //
+    // An exported impl block is usually most of a type's API, and the parts
+    // jedem cannot lower yet -- or that make no sense across a boundary -- are
+    // the exception. Marking those is less disruptive than splitting the impl
+    // in two, and it keeps the annotation on the original method.
+    if has_skip(attrs)? {
         return Ok(None);
     }
     if sig.asyncness.is_some() {
@@ -682,4 +695,29 @@ fn is_ident(s: &str) -> bool {
     let mut chars = s.chars();
     matches!(chars.next(), Some(c) if c.is_alphabetic() || c == '_')
         && chars.all(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// Does this item carry `#[jedem(skip)]`?
+fn has_skip(attrs: &[syn::Attribute]) -> syn::Result<bool> {
+    for a in attrs {
+        if !a.path().is_ident("jedem") {
+            continue;
+        }
+        let mut found = false;
+        // `parse_nested_meta` errors on anything it does not recognise, and
+        // `name = "..."` is handled elsewhere, so tolerate it here.
+        let _ = a.parse_nested_meta(|m| {
+            if m.path.is_ident("skip") {
+                found = true;
+            }
+            if m.input.peek(syn::Token![=]) {
+                let _: syn::Expr = m.value()?.parse()?;
+            }
+            Ok(())
+        });
+        if found {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }

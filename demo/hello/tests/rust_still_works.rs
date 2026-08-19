@@ -86,3 +86,25 @@ fn doc_comments_and_pinned_names_are_captured() {
         "unpinned keeps the Rust name"
     );
 }
+
+#[test]
+fn a_skipped_method_stays_rust_only() {
+    let mut c = hello::Counter::new();
+    c.add(7);
+    // Callable from Rust exactly as written...
+    assert_eq!(c.into_total(), 7);
+
+    // ...and absent from the surface, so no backend has to lower it.
+    let counter = JEDEM_SURFACE
+        .interfaces
+        .iter()
+        .find(|i| i.name == "Counter")
+        .unwrap();
+    assert!(counter.handle);
+    let names: Vec<&str> = counter.ops.iter().map(|o| o.name).collect();
+    assert!(!names.contains(&"into_total"), "got {names:?}");
+    assert_eq!(
+        names,
+        ["new", "starting_at", "add", "total", "steps", "halve"]
+    );
+}

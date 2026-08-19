@@ -200,6 +200,16 @@ impl Counter {
         self.steps
     }
 
+    /// Consume the counter and hand back its total.
+    ///
+    /// Taking `self` by value is meaningless across a language boundary -- the
+    /// other side still holds the handle -- so this stays Rust-only. Without
+    /// the marker, exporting this impl would be a compile error.
+    #[jedem(skip)]
+    pub fn into_total(self) -> i64 {
+        self.total
+    }
+
     /// Halve the total, refusing an odd one.
     pub fn halve(&mut self) -> Result<i64, String> {
         if self.total % 2 != 0 {
