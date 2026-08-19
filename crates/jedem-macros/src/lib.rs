@@ -81,6 +81,7 @@ fn expand_fn(f: &ItemFn) -> syn::Result<proc_macro2::TokenStream> {
                 doc: #doc,
                 ops: &[#op],
                 handle: false,
+                consuming: false,
             };
         }
     })
@@ -121,6 +122,7 @@ fn expand_mod(m: &ItemMod) -> syn::Result<proc_macro2::TokenStream> {
             doc: #doc,
             ops: &[#(#ops),*],
             handle: false,
+            consuming: false,
         };
     };
     if let Some((_, items)) = &mut cleaned.content {
@@ -179,14 +181,30 @@ fn expand_export(input: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
     for item in &input.items {
         let ImplItem::Fn(f) = item else { continue };
         if let Some(FnArg::Receiver(r)) = f.sig.inputs.first() {
-            if r.reference.is_none() && !has_skip(&f.attrs)? {
-                return Err(syn::Error::new(
-                    r.span(),
-                    "a method taking `self` by value consumes the handle, which has no \
-                     meaning once it is owned by another language. Take `&self` or \
-                     `&mut self`, make it an associated function, or leave it out with \
-                     #[jedem(skip)].",
-                ));
+            // A builder -- `self` in, `Self` out -- is fine: it names the same
+            // object, so backends mutate in place. Anything else that takes
+            // `self` by value destroys the handle while the other language is
+            // still holding it, and there is no honest lowering for that.
+            if r.reference.is_none() && !has_skip(&f.attrs)? && !returns_self_bare(&f.sig.output) {
+                let msg = if returns_self(&f.sig.output) {
+                    // `Result<Self, E>` has no sound lowering: on the error path
+                    // Rust has already consumed the value and hands nothing back,
+                    // so the wrapper is left empty. Every other method would then
+                    // have to answer for an empty handle, turning infallible
+                    // signatures fallible across the whole interface -- a much
+                    // larger change than the builder itself.
+                    "a builder returning `Result<Self, E>` is not supported: when it \
+                     fails, Rust has consumed the value and the handle another \
+                     language holds would be left empty. Return `Self` and report \
+                     the failure some other way, or leave it out with #[jedem(skip)]."
+                } else {
+                    "this method consumes `self` without returning `Self`, which would \
+                     destroy a handle another language still holds. A builder taking \
+                     `self` and returning `Self` is supported and needs no change. \
+                     Otherwise take `&self` or `&mut self`, make it an associated \
+                     function, or leave it out with #[jedem(skip)]."
+                };
+                return Err(syn::Error::new(r.span(), msg));
             }
         }
         if let Some(op) = lower_fn(&f.sig, &f.attrs, &f.vis, &format!("{type_name}::"))? {
@@ -216,6 +234,20 @@ fn expand_export(input: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
                 if matches!(unwrap_result(t).unwrap_or(t), Type::Path(p) if p.path.is_ident("Self")))
     });
 
+    // Does any exported op move out of the wrapper? Only then does the
+    // generated handle need `Option` storage.
+    let is_consuming = input.items.iter().any(|item| {
+        let ImplItem::Fn(f) = item else { return false };
+        if !matches!(f.vis, syn::Visibility::Public(_)) {
+            return false;
+        }
+        if has_skip(&f.attrs).unwrap_or(false) {
+            return false;
+        }
+        matches!(f.sig.inputs.first(), Some(FnArg::Receiver(r)) if r.reference.is_none())
+            && returns_self_bare(&f.sig.output)
+    });
+
     let const_name = format_ident!("JEDEM_INTERFACE");
     let iface_doc = opt_str(doc_of(&input.attrs).as_deref());
     let type_name_lit = type_name.as_str();
@@ -231,6 +263,7 @@ fn expand_export(input: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
                 doc: #iface_doc,
                 ops: &[#(#ops),*],
                 handle: #is_handle,
+                consuming: #is_consuming,
             };
         }
     })
@@ -383,14 +416,13 @@ fn lower_fn(
         FnArg::Receiver(r) => Some(r),
         _ => None,
     });
-    let returns_self = match &sig.output {
-        ReturnType::Type(_, t) => {
-            let inner = unwrap_result(t).unwrap_or(t);
-            matches!(inner, Type::Path(p) if p.path.is_ident("Self"))
-        }
-        ReturnType::Default => false,
-    };
+    let returns_self = returns_self(&sig.output);
     let kind = match (receiver, returns_self) {
+        // `self` by value returning a bare `Self` is a builder, whatever the
+        // `mut` -- the mutability there is the callee's business.
+        (Some(r), _) if r.reference.is_none() && returns_self_bare(&sig.output) => {
+            quote!(::jedem::OpKind::Builder)
+        }
         (Some(r), _) => {
             let mutable = r.mutability.is_some();
             quote!(::jedem::OpKind::Method { mutable: #mutable })
@@ -720,4 +752,21 @@ fn has_skip(attrs: &[syn::Attribute]) -> syn::Result<bool> {
         }
     }
     Ok(false)
+}
+
+/// Does this return type name `Self`, bare or inside a `Result`?
+fn returns_self(output: &ReturnType) -> bool {
+    match output {
+        ReturnType::Type(_, t) => {
+            let inner = unwrap_result(t).unwrap_or(t);
+            matches!(inner, Type::Path(p) if p.path.is_ident("Self"))
+        }
+        ReturnType::Default => false,
+    }
+}
+
+/// Does this return type name `Self` directly, with no `Result` around it?
+fn returns_self_bare(output: &ReturnType) -> bool {
+    matches!(output, ReturnType::Type(_, t)
+        if matches!(&**t, Type::Path(p) if p.path.is_ident("Self")))
 }

@@ -105,6 +105,37 @@ fn a_skipped_method_stays_rust_only() {
     assert!(!names.contains(&"into_total"), "got {names:?}");
     assert_eq!(
         names,
-        ["new", "starting_at", "add", "total", "steps", "halve"]
+        [
+            "new",
+            "starting_at",
+            "with_total",
+            "add",
+            "total",
+            "steps",
+            "halve"
+        ]
+    );
+}
+
+#[test]
+fn a_builder_is_classified_as_one_and_stays_a_builder_in_rust() {
+    // Unannotated, unchanged, and still the ordinary Rust move-builder.
+    let c = hello::Counter::new().with_total(10);
+    assert_eq!(c.total(), 10);
+
+    let counter = JEDEM_SURFACE
+        .interfaces
+        .iter()
+        .find(|i| i.name == "Counter")
+        .unwrap();
+    let op = counter
+        .ops
+        .iter()
+        .find(|o| o.name == "with_total")
+        .expect("with_total is exported without any annotation on it");
+    assert_eq!(op.kind, jedem::OpKind::Builder);
+    assert!(
+        counter.consuming,
+        "a handle with a builder has to move its value out, so it stores an Option"
     );
 }

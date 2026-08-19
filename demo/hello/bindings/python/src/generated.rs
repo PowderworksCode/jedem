@@ -17,6 +17,11 @@ use pyo3::prelude::*;
 fn err(e: impl std::fmt::Display) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
+
+/// A handle is empty only between a builder taking its value out and putting
+/// it back, so seeing this means that builder panicked. The handle cannot be
+/// repaired -- Rust consumed the value -- so every later call says so.
+const EMPTIED: &str = "this handle was emptied by a builder that panicked";
 /// How far along a value is — the shape jawohl's `Syntax` has, and the reason
 /// enums exist: without them this crossed as a magic string.
 #[pyclass(eq, eq_int)]
@@ -140,12 +145,12 @@ pub fn maybe(present: bool) -> Option<Ripeness> {
 
 #[pyclass]
 pub struct Counter {
-    inner: hello::Counter,
+    inner: Option<hello::Counter>,
 }
 
 impl From<hello::Counter> for Counter {
     fn from(inner: hello::Counter) -> Self {
-        Self { inner }
+        Self { inner: Some(inner) }
     }
 }
 
@@ -163,24 +168,44 @@ impl Counter {
         Ok(hello::Counter::starting_at(start).map_err(err)?.into())
     }
 
+    /// Start the tally somewhere other than zero.
+    ///
+    /// An ordinary Rust builder, unannotated and unchanged. It consumes `self`
+    /// and returns `Self`, which names the same object -- so the bindings
+    /// mutate in place and hand the same handle back, and the chain reads the
+    /// same in every language.
+    fn with_total(mut slf: PyRefMut<'_, Self>, total: i64) -> PyRefMut<'_, Self> {
+        let inner = slf.inner.take().expect(EMPTIED);
+        slf.inner = Some(inner.with_total(total));
+        slf
+    }
+
     /// Add to the tally. State persists across calls — that is the point.
     fn add(&mut self, n: i64) {
-        self.inner.add(n);
+        self.get_mut().add(n);
     }
 
     /// The running total.
     fn total(&self) -> i64 {
-        self.inner.total()
+        self.get().total()
     }
 
     /// How many times `add` has been called.
     fn steps(&self) -> i64 {
-        self.inner.steps()
+        self.get().steps()
     }
 
     /// Halve the total, refusing an odd one.
     fn halve(&mut self) -> PyResult<i64> {
-        self.inner.halve().map_err(err)
+        self.get_mut().halve().map_err(err)
+    }
+}
+impl Counter {
+    fn get(&self) -> &hello::Counter {
+        self.inner.as_ref().expect(EMPTIED)
+    }
+    fn get_mut(&mut self) -> &mut hello::Counter {
+        self.inner.as_mut().expect(EMPTIED)
     }
 }
 

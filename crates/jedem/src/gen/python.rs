@@ -46,7 +46,7 @@ pub(super) fn scaffold(
             path: "src/lib.rs".into(),
             contents: format!(
                 "{}\n\
-                 mod generated;\n\n\
+mod generated;\n\n\
                  #[pyo3::pymodule]\n\
                  fn {module}(m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {{\n\
                  \x20   generated::register(m)\n\
@@ -76,6 +76,16 @@ fn err(e: impl std::fmt::Display) -> PyErr {
 }
 "#,
     );
+    if surface.interfaces.iter().any(|i| i.consuming) {
+        out.push_str(
+            r#"
+/// A handle is empty only between a builder taking its value out and putting
+/// it back, so seeing this means that builder panicked. The handle cannot be
+/// repaired -- Rust consumed the value -- so every later call says so.
+const EMPTIED: &str = "this handle was emptied by a builder that panicked";
+"#,
+        );
+    }
 
     // Declare every enum the surface reaches, once, with conversions to and
     // from the core's own type. Python gets a real class, not a magic string.
@@ -188,6 +198,26 @@ fn handle_class(iface: &crate::descriptor::Interface, core_path: &str) -> String
             }
         }
     }
+
+    // A builder has to move the core value out to call, so a handle with one
+    // keeps it in an `Option`. Every other handle holds it directly and pays
+    // nothing -- no accessor, no unwrap -- for a feature it does not use.
+    let (field, wrap, get, get_mut) = if iface.consuming {
+        (
+            format!("Option<{core_path}::{name}>"),
+            "Some(inner)".to_string(),
+            "self.get()".to_string(),
+            "self.get_mut()".to_string(),
+        )
+    } else {
+        (
+            format!("{core_path}::{name}"),
+            "inner".to_string(),
+            "self.inner".to_string(),
+            "self.inner".to_string(),
+        )
+    };
+
     s.push_str("#[pyclass]\n");
     // Wrapping goes through `From` rather than a struct literal at each
     // constructor. `Self { inner }` is short enough that rustfmt leaves it on
@@ -195,13 +225,15 @@ fn handle_class(iface: &crate::descriptor::Interface, core_path: &str) -> String
     // `struct_lit_width` and gets broken across four -- output the generator
     // would have to predict to stay `cargo fmt` clean.
     s.push_str(&format!(
-        "pub struct {name} {{\n    inner: {core_path}::{name},\n}}\n\n\
+        "pub struct {name} {{\n    inner: {field},\n}}\n\n\
          impl From<{core_path}::{name}> for {name} {{\n\
          \x20   fn from(inner: {core_path}::{name}) -> Self {{\n\
-         \x20       Self {{ inner }}\n\
+         \x20       Self {{ inner: {wrap} }}\n\
          \x20   }}\n\
-         }}\n\n#[pymethods]\nimpl {name} {{\n"
+         }}\n\n"
     ));
+
+    s.push_str(&format!("#[pymethods]\nimpl {name} {{\n"));
 
     for op in iface.ops {
         let exported = op.export_name.unwrap_or(op.name);
@@ -256,6 +288,30 @@ fn handle_class(iface: &crate::descriptor::Interface, core_path: &str) -> String
                     s.push_str(&format!("        {call}.into()\n"));
                 }
             }
+            OpKind::Builder => {
+                // The Rust builder consumes `self` and returns `Self`, which
+                // names the same object -- the caller's old binding is dead, so
+                // nothing can tell in-place mutation apart from it. Handing the
+                // same handle back keeps `Stream().with_x(1).with_y(2)`
+                // reading exactly as it does in Rust.
+                if exported != op.name {
+                    s.push_str(&format!("    #[pyo3(name = \"{exported}\")]\n"));
+                }
+                let all = std::iter::once("mut slf: PyRefMut<'_, Self>".to_string())
+                    .chain(params.iter().cloned())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                s.push_str(&format!(
+                    "    fn {exported}({all}) -> PyRefMut<'_, Self> {{\n"
+                ));
+                s.push_str(&format!(
+                    "        let inner = slf.inner.take().expect(EMPTIED);\n\
+                     \x20       slf.inner = Some(inner.{}({}));\n\
+                     \x20       slf\n",
+                    op.name,
+                    args.join(", ")
+                ));
+            }
             OpKind::Method { mutable } => {
                 let recv = if mutable { "&mut self" } else { "&self" };
                 let all = std::iter::once(recv.to_string())
@@ -270,7 +326,8 @@ fn handle_class(iface: &crate::descriptor::Interface, core_path: &str) -> String
                     exported,
                     return_clause(op)
                 ));
-                let call = format!("self.inner.{}({})", op.name, args.join(", "));
+                let recv = if mutable { &get_mut } else { &get };
+                let call = format!("{recv}.{}({})", op.name, args.join(", "));
                 s.push_str(&body(op, &call, "        "));
             }
             OpKind::Function => {
@@ -293,6 +350,24 @@ fn handle_class(iface: &crate::descriptor::Interface, core_path: &str) -> String
         s.pop();
     }
     s.push_str("}\n");
+    // The accessors go after the exported block, matching node -- where
+    // napi-derive needs the `#[napi]` struct and impl adjacent.
+    if iface.consuming {
+        // Empty only between a builder taking the value and putting it back,
+        // which is not observable unless that builder panicked -- in which case
+        // the panic is the error, and this message says why the handle is now
+        // unusable.
+        s.push_str(&format!(
+            "impl {name} {{\n\
+             \x20   fn get(&self) -> &{core_path}::{name} {{\n\
+             \x20       self.inner.as_ref().expect(EMPTIED)\n\
+             \x20   }}\n\
+             \x20   fn get_mut(&mut self) -> &mut {core_path}::{name} {{\n\
+             \x20       self.inner.as_mut().expect(EMPTIED)\n\
+             \x20   }}\n\
+             }}\n\n"
+        ));
+    }
     s
 }
 

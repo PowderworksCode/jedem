@@ -260,6 +260,7 @@ pub(crate) mod tests_support {
         doc: None,
         ops: &[GREET, FALLIBLE],
         handle: false,
+        consuming: false,
     };
     /// A handle, whose generated constructor is the construct where the
     /// generator most easily drifts from rustfmt: a struct literal long enough
@@ -305,11 +306,29 @@ pub(crate) mod tests_support {
         rust_path: "Counter::add",
     };
 
+    /// A builder: `self` in, `Self` out. The construct this whole path exists
+    /// for, and the one that makes the wrapper hold an `Option`.
+    pub const BUILD: Op = Op {
+        kind: OpKind::Builder,
+        name: "with_total",
+        doc: None,
+        export_name: None,
+        params: &[Param {
+            name: "total",
+            ty: Type::I64,
+            borrowed: false,
+        }],
+        returns: Type::Unit,
+        fallible: false,
+        rust_path: "Counter::with_total",
+    };
+
     pub const HANDLE: Interface = Interface {
         name: "Counter",
         doc: Some("A live counter."),
-        ops: &[CTOR, FALLIBLE_CTOR, BUMP],
+        ops: &[CTOR, FALLIBLE_CTOR, BUMP, BUILD],
         handle: true,
+        consuming: true,
     };
 
     pub const SURFACE: Surface = Surface {
@@ -355,6 +374,7 @@ mod tests {
         doc: None,
         ops: &[GREET, FALLIBLE],
         handle: false,
+        consuming: false,
     };
     const SURFACE: Surface = Surface {
         name: "demo",
@@ -574,9 +594,15 @@ mod rustfmt_stability {
     /// them like any other source. Every time the generator's layout differed
     /// from rustfmt's, the next `cargo fmt` silently edited the committed
     /// bindings and the drift guard failed pointing at the surface -- which
-    /// nobody had touched. Marking the files `#![rustfmt::skip]` would say this
-    /// directly, but custom inner attributes are still unstable, so instead the
-    /// generator agrees with rustfmt and this test holds it to that.
+    /// nobody had touched.
+    ///
+    /// Two ways of opting out are closed. `#![rustfmt::skip]` is a custom inner
+    /// attribute, still unstable, so rustc rejects the file. `#[rustfmt::skip]`
+    /// on the `mod generated;` declaration does work on rustfmt -- and breaks
+    /// napi-derive, which keeps a global registry of the structs it has seen
+    /// and relies on expansion order; the attribute perturbs that order enough
+    /// that every `#[napi] impl` reports its struct as unparsed. So the
+    /// generator agrees with rustfmt instead, and this test holds it to that.
     ///
     /// Skipped when rustfmt is not installed, so the suite still runs on a
     /// toolchain without it.

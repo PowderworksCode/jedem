@@ -74,6 +74,19 @@ try:
 except TypeError:
     print("  ok   add rejects non-integers with TypeError")
 
+print("a Rust move-builder chains the same way here")
+# `with_total` takes `self` and returns `Self` in Rust. Nothing about it was
+# annotated or reshaped -- the binding mutates in place and hands the same
+# object back, so the chain reads the way the Rust one does.
+chained = hello.Counter().with_total(10)
+failures += check("builder set the value", chained.total(), 10)
+failures += check("and it is one object", chained.with_total(20).total(), 20)
+built = hello.Counter()
+same = built.with_total(5)
+failures += check("returns the same handle, not a copy", same is built, True)
+built.add(1)
+failures += check("so mutations land on both names", same.total(), 6)
+
 print("handles: state that lives across calls")
 c = hello.Counter()
 check("starts empty", c.total(), 0)

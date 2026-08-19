@@ -90,6 +90,19 @@ try {
   console.log("  ok   an unknown variant is rejected");
 }
 
+console.log("a Rust move-builder chains the same way here");
+// `withTotal` takes `self` and returns `Self` in Rust. Nothing about it was
+// annotated or reshaped -- the binding mutates in place and returns `this`, so
+// the chain reads the way the Rust one does, and the way JS builders do.
+const chained = new hello.Counter().withTotal(10);
+failures += check("builder set the value", chained.total(), 10);
+failures += check("and it is one object", chained.withTotal(20).total(), 20);
+const built = new hello.Counter();
+const same = built.withTotal(5);
+failures += check("returns the same handle, not a copy", same === built, true);
+built.add(1);
+failures += check("so mutations land on both names", same.total(), 6);
+
 console.log("handles: state that lives across calls");
 const c = new hello.Counter();
 check("starts empty", c.total(), 0);

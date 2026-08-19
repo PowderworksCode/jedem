@@ -11,6 +11,7 @@
 // references them by name and rustc cannot tell they are used.
 #![allow(dead_code)]
 
+use napi::bindgen_prelude::This;
 use napi_derive::napi;
 
 /// A core error surfaces as a thrown JS `Error` carrying its `Display` text --
@@ -19,6 +20,11 @@ use napi_derive::napi;
 fn err(e: impl std::fmt::Display) -> napi::Error {
     napi::Error::from_reason(e.to_string())
 }
+
+/// A handle is empty only between a builder taking its value out and putting
+/// it back, so seeing this means that builder panicked. The handle cannot be
+/// repaired -- Rust consumed the value -- so every later call says so.
+const EMPTIED: &str = "this handle was emptied by a builder that panicked";
 /// How far along a value is — the shape jawohl's `Syntax` has, and the reason
 /// enums exist: without them this crossed as a magic string.
 #[napi(string_enum)]
@@ -139,12 +145,12 @@ pub fn maybe(present: bool) -> Option<Ripeness> {
 
 #[napi]
 pub struct Counter {
-    inner: hello::Counter,
+    inner: Option<hello::Counter>,
 }
 
 impl From<hello::Counter> for Counter {
     fn from(inner: hello::Counter) -> Self {
-        Self { inner }
+        Self { inner: Some(inner) }
     }
 }
 
@@ -162,27 +168,48 @@ impl Counter {
         Ok(hello::Counter::starting_at(start).map_err(err)?.into())
     }
 
+    /// Start the tally somewhere other than zero.
+    ///
+    /// An ordinary Rust builder, unannotated and unchanged. It consumes `self`
+    /// and returns `Self`, which names the same object -- so the bindings
+    /// mutate in place and hand the same handle back, and the chain reads the
+    /// same in every language.
+    #[napi(js_name = "withTotal")]
+    pub fn with_total<'a>(&mut self, this: This<'a>, total: i64) -> This<'a> {
+        let inner = self.inner.take().expect(EMPTIED);
+        self.inner = Some(inner.with_total(total));
+        this
+    }
+
     /// Add to the tally. State persists across calls — that is the point.
     #[napi(js_name = "add")]
     pub fn add(&mut self, n: i64) {
-        self.inner.add(n);
+        self.get_mut().add(n);
     }
 
     /// The running total.
     #[napi(js_name = "total")]
     pub fn total(&self) -> i64 {
-        self.inner.total()
+        self.get().total()
     }
 
     /// How many times `add` has been called.
     #[napi(js_name = "steps")]
     pub fn steps(&self) -> i64 {
-        self.inner.steps()
+        self.get().steps()
     }
 
     /// Halve the total, refusing an odd one.
     #[napi(js_name = "halve")]
     pub fn halve(&mut self) -> napi::Result<i64> {
-        self.inner.halve().map_err(err)
+        self.get_mut().halve().map_err(err)
+    }
+}
+impl Counter {
+    fn get(&self) -> &hello::Counter {
+        self.inner.as_ref().expect(EMPTIED)
+    }
+    fn get_mut(&mut self) -> &mut hello::Counter {
+        self.inner.as_mut().expect(EMPTIED)
     }
 }

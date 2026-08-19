@@ -184,6 +184,17 @@ impl Counter {
         })
     }
 
+    /// Start the tally somewhere other than zero.
+    ///
+    /// An ordinary Rust builder, unannotated and unchanged. It consumes `self`
+    /// and returns `Self`, which names the same object -- so the bindings
+    /// mutate in place and hand the same handle back, and the chain reads the
+    /// same in every language.
+    pub fn with_total(mut self, total: i64) -> Self {
+        self.total = total;
+        self
+    }
+
     /// Add to the tally. State persists across calls — that is the point.
     pub fn add(&mut self, n: i64) {
         self.total += n;

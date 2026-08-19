@@ -74,7 +74,7 @@ pub(super) fn scaffold(
                 "{}\n\
                  // napi registers each function at module load, so there is no\n\
                  // module function to write.\n\
-                 mod generated;\n",
+mod generated;\n",
                 generated_marker("//", surface, "node"),
             ),
         },
@@ -92,6 +92,7 @@ pub(super) fn generate(surface: &Surface, core_path: &str) -> String {
 // references them by name and rustc cannot tell they are used.
 #![allow(dead_code)]
 
+use napi::bindgen_prelude::This;
 use napi_derive::napi;
 
 /// A core error surfaces as a thrown JS `Error` carrying its `Display` text --
@@ -102,6 +103,16 @@ fn err(e: impl std::fmt::Display) -> napi::Error {
 }
 "#,
     );
+    if surface.interfaces.iter().any(|i| i.consuming) {
+        out.push_str(
+            r#"
+/// A handle is empty only between a builder taking its value out and putting
+/// it back, so seeing this means that builder panicked. The handle cannot be
+/// repaired -- Rust consumed the value -- so every later call says so.
+const EMPTIED: &str = "this handle was emptied by a builder that panicked";
+"#,
+        );
+    }
 
     // napi's `string_enum` gives TypeScript a string-literal union, which is
     // what a TS developer would have written -- not an opaque number.
@@ -141,15 +152,36 @@ fn handle_class(iface: &crate::descriptor::Interface, core_path: &str) -> String
             }
         }
     }
+    // A builder has to move the core value out to call, so a handle with one
+    // keeps it in an `Option`. Every other handle holds it directly and pays
+    // nothing -- no accessor, no unwrap -- for a feature it does not use.
+    let (field, wrap, get, get_mut) = if iface.consuming {
+        (
+            format!("Option<{core_path}::{name}>"),
+            "Some(inner)".to_string(),
+            "self.get()".to_string(),
+            "self.get_mut()".to_string(),
+        )
+    } else {
+        (
+            format!("{core_path}::{name}"),
+            "inner".to_string(),
+            "self.inner".to_string(),
+            "self.inner".to_string(),
+        )
+    };
+
     s.push_str("#[napi]\n");
     s.push_str(&format!(
-        "pub struct {name} {{\n    inner: {core_path}::{name},\n}}\n\n\
+        "pub struct {name} {{\n    inner: {field},\n}}\n\n\
          impl From<{core_path}::{name}> for {name} {{\n\
          \x20   fn from(inner: {core_path}::{name}) -> Self {{\n\
-         \x20       Self {{ inner }}\n\
+         \x20       Self {{ inner: {wrap} }}\n\
          \x20   }}\n\
-         }}\n\n#[napi]\nimpl {name} {{\n"
+         }}\n\n"
     ));
+
+    s.push_str(&format!("#[napi]\nimpl {name} {{\n"));
 
     for op in iface.ops {
         if let Some(doc) = op.doc {
@@ -210,8 +242,40 @@ fn handle_class(iface: &crate::descriptor::Interface, core_path: &str) -> String
                     op.name,
                     return_clause(op)
                 ));
-                let call = format!("self.inner.{}({})", op.name, args.join(", "));
+                let recv = if mutable { &get_mut } else { &get };
+                let call = format!("{recv}.{}({})", op.name, args.join(", "));
                 s.push_str(&body(op, &call, "        "));
+            }
+            OpKind::Builder => {
+                // The Rust builder consumes `self` and returns `Self`, which
+                // names the same object -- the caller's old binding is dead, so
+                // nothing can tell in-place mutation apart from it. Returning
+                // `this` keeps `new Stream().withX(1).withY(2)` reading the way
+                // the Rust chain does, and the way JS builders normally do.
+                //
+                // `This` is written bare on purpose: napi-derive recognises it
+                // by name against a fixed list, so a qualified path is taken
+                // for an ordinary argument and the class fails to register.
+                s.push_str(&format!("    #[napi(js_name = \"{}\")]\n", js_name(op)));
+                let all = std::iter::once("&mut self".to_string())
+                    .chain(std::iter::once("this: This<'a>".to_string()))
+                    .chain(params.iter().cloned())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                // The lifetime is named rather than elided: with `&mut self`
+                // present, `'_` in return position binds to the receiver, not
+                // to `this`.
+                s.push_str(&format!(
+                    "    pub fn {}<'a>({all}) -> This<'a> {{\n",
+                    op.name
+                ));
+                s.push_str(&format!(
+                    "        let inner = self.inner.take().expect(EMPTIED);\n\
+                     \x20       self.inner = Some(inner.{}({}));\n\
+                     \x20       this\n",
+                    op.name,
+                    args.join(", ")
+                ));
             }
             OpKind::Function => {
                 s.push_str(&format!(
@@ -236,6 +300,22 @@ fn handle_class(iface: &crate::descriptor::Interface, core_path: &str) -> String
         s.pop();
     }
     s.push_str("}\n");
+    // The accessors go after the exported block: napi-derive needs the
+    // `#[napi]` struct and impl to be adjacent, and an unrelated `impl` in
+    // between makes it lose the struct.
+    if iface.consuming {
+        s.push_str(&format!(
+            "impl {name} {{\n\
+             \x20   fn get(&self) -> &{core_path}::{name} {{\n\
+             \x20       self.inner.as_ref().expect(EMPTIED)\n\
+             \x20   }}\n\
+             \x20   fn get_mut(&mut self) -> &mut {core_path}::{name} {{\n\
+             \x20       self.inner.as_mut().expect(EMPTIED)\n\
+             \x20   }}\n\
+             }}\n\n"
+        ));
+    }
+
     s
 }
 

@@ -33,6 +33,13 @@ pub struct Interface {
     /// incremental API has to be flattened into functions that re-do their work
     /// from the beginning every time.
     pub handle: bool,
+    /// True when some op is an [`OpKind::Builder`], which the wrapper has to
+    /// move out of to call.
+    ///
+    /// Only such a wrapper stores its core value in an `Option`; every other
+    /// handle holds it directly and pays nothing for a feature it does not
+    /// use.
+    pub consuming: bool,
 }
 
 /// One exported function.
@@ -45,6 +52,14 @@ pub enum OpKind {
     Ctor,
     /// Takes `&self` or `&mut self`.
     Method { mutable: bool },
+    /// A builder: consumes `self` and returns `Self` (or `Result<Self, E>`).
+    ///
+    /// Rust's move semantics make this the same object as the one that went
+    /// in -- the caller's old binding is dead, so nothing can observe the
+    /// difference between "consumed and returned" and "mutated in place".
+    /// Backends therefore lower it to an in-place mutation that hands the
+    /// same handle back, and chaining reads exactly as it does in Rust.
+    Builder,
 }
 
 #[derive(Debug, Clone, Copy)]
