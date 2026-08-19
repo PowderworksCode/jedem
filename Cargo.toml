@@ -7,6 +7,11 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/PowderworksCode/jedem"
+# `#[diagnostic::on_unimplemented]`, which turns "trait not implemented" into a
+# sentence naming the missing derive, stabilised in 1.78. Declared here so a
+# crate taking a jedem dependency reads its floor from the manifest rather than
+# discovering it when its own MSRV job fails.
+rust-version = "1.78"
 
 [workspace.dependencies]
 jedem = { path = "crates/jedem", version = "0.1.0" }

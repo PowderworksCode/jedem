@@ -3,6 +3,7 @@ name = "jedem-macros"
 description = "Proc macros for jedem. Use the `jedem` crate instead of depending on this directly."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
