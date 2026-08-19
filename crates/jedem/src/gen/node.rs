@@ -416,6 +416,13 @@ fn op_fn(op: &Op, core_path: &str) -> String {
 /// The body of a call. Bytes become an owned Buffer; an enum becomes the
 /// binding-local type, mapped through any container.
 fn body(op: &Op, call: &str, indent: &str) -> String {
+    // A returned Rust width that is not the boundary width casts on the way
+    // out, the mirror of `Param::cast` on the way in.
+    let call = &match op.returns_cast {
+        Some(_) if op.fallible => format!("{call}.map(|v| v as i64)"),
+        Some(_) => format!("({call}) as i64"),
+        None => call.to_string(),
+    };
     let conv = if op.returns == Type::Bytes {
         Some(".into()".to_string())
     } else {
@@ -447,6 +454,11 @@ fn param_ty(p: &Param) -> String {
 fn arg_expr(p: &Param) -> String {
     if let Some(c) = super::convert(&p.ty) {
         return format!("{}{c}", p.name);
+    }
+    // Several Rust widths cross as one boundary type; the core wants its own
+    // back.
+    if let Some(cast) = p.cast {
+        return format!("{} as {cast}", p.name);
     }
     match (p.ty, p.borrowed) {
         // `Uint8Array` derefs to `[u8]`, so a borrow reaches a `&[u8]` core.

@@ -103,6 +103,11 @@ failures += check("returns the same handle, not a copy", same === built, true);
 built.add(1);
 failures += check("so mutations land on both names", same.total(), 6);
 
+console.log("a width that is not the boundary width");
+// `takeSteps(usize) -> usize` crosses as i64 both ways, cast at the call site.
+const stepper = new hello.Counter();
+failures += check("usize in, usize out", stepper.takeSteps(3), 3);
+
 console.log("handles: state that lives across calls");
 const c = new hello.Counter();
 check("starts empty", c.total(), 0);

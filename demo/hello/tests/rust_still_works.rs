@@ -112,6 +112,7 @@ fn a_skipped_method_stays_rust_only() {
             "add",
             "total",
             "steps",
+            "take_steps",
             "halve"
         ]
     );

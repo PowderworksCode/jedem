@@ -87,6 +87,11 @@ failures += check("returns the same handle, not a copy", same is built, True)
 built.add(1)
 failures += check("so mutations land on both names", same.total(), 6)
 
+print("a width that is not the boundary width")
+# `take_steps(usize) -> usize` crosses as i64 both ways, cast at the call site.
+stepper = hello.Counter()
+failures += check("usize in, usize out", stepper.take_steps(3), 3)
+
 print("handles: state that lives across calls")
 c = hello.Counter()
 check("starts empty", c.total(), 0)

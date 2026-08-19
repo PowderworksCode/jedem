@@ -221,6 +221,18 @@ impl Counter {
         self.total
     }
 
+    /// A width that is not the boundary width.
+    ///
+    /// `usize` crosses as `i64`, because that is what Python and JavaScript
+    /// have, and is cast back at the call site -- in both directions. Nothing
+    /// about this signature had to change to say so.
+    pub fn take_steps(&mut self, n: usize) -> usize {
+        for _ in 0..n {
+            self.add(1);
+        }
+        self.steps as usize
+    }
+
     /// Halve the total, refusing an odd one.
     pub fn halve(&mut self) -> Result<i64, String> {
         if self.total % 2 != 0 {

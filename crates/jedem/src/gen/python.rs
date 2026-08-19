@@ -254,9 +254,12 @@ fn handle_class(iface: &crate::descriptor::Interface, core_path: &str) -> String
         let args: Vec<String> = op
             .params
             .iter()
-            .map(|p| match super::convert(&p.ty) {
-                Some(c) => format!("{}{c}", p.name),
-                None => p.name.to_string(),
+            .map(|p| match (super::convert(&p.ty), p.cast) {
+                (Some(c), _) => format!("{}{c}", p.name),
+                // Several Rust widths cross as one boundary type; the core
+                // wants its own back.
+                (None, Some(cast)) => format!("{} as {cast}", p.name),
+                (None, None) => p.name.to_string(),
             })
             .collect();
 
@@ -393,9 +396,10 @@ fn op_fn(op: &Op, exported: &str, core_path: &str) -> String {
     let args: Vec<String> = op
         .params
         .iter()
-        .map(|p| match super::convert(&p.ty) {
-            Some(c) => format!("{}{c}", p.name),
-            None => p.name.to_string(),
+        .map(|p| match (super::convert(&p.ty), p.cast) {
+            (Some(c), _) => format!("{}{c}", p.name),
+            (None, Some(cast)) => format!("{} as {cast}", p.name),
+            (None, None) => p.name.to_string(),
         })
         .collect();
 
@@ -419,6 +423,13 @@ fn op_fn(op: &Op, exported: &str, core_path: &str) -> String {
 /// The body of a call: convert an enum through any container, and map the error
 /// into this language's failure mechanism.
 fn body(op: &Op, call: &str, indent: &str) -> String {
+    // A returned Rust width that is not the boundary width casts on the way
+    // out, the mirror of `Param::cast` on the way in.
+    let call = &match op.returns_cast {
+        Some(_) if op.fallible => format!("{call}.map(|v| v as i64)"),
+        Some(_) => format!("({call}) as i64"),
+        None => call.to_string(),
+    };
     let conv = super::convert(&op.returns);
     match (op.fallible, op.returns, conv) {
         (true, Type::Unit, _) => format!("{indent}{call}.map_err(err)?;\n{indent}Ok(())\n"),

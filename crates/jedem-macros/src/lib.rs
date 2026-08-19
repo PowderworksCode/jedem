@@ -445,8 +445,15 @@ fn lower_fn(
         };
         let ty = lower_type(&pt.ty)?;
         let borrowed = matches!(&*pt.ty, Type::Reference(_));
-        params.push((pname, ty, borrowed));
+        let cast = opt_str(int_cast(&pt.ty).as_deref());
+        params.push((pname, ty, borrowed, cast));
     }
+
+    let returns_cast = match &sig.output {
+        ReturnType::Default => None,
+        ReturnType::Type(_, t) => int_cast(unwrap_result(t).unwrap_or(t)),
+    };
+    let returns_cast = opt_str(returns_cast.as_deref());
 
     let (returns, fallible) = match &sig.output {
         ReturnType::Default => (quote!(::jedem::Type::Unit), false),
@@ -466,8 +473,8 @@ fn lower_fn(
     let rust_path = format!("{path_prefix}{name}");
     let doc_tok = opt_str(doc.as_deref());
     let export_tok = opt_str(export_name.as_deref());
-    let param_toks = params.iter().map(|(n, t, b)| {
-        quote! { ::jedem::Param { name: #n, ty: #t, borrowed: #b } }
+    let param_toks = params.iter().map(|(n, t, b, c)| {
+        quote! { ::jedem::Param { name: #n, ty: #t, borrowed: #b, cast: #c } }
     });
 
     Ok(Some(quote! {
@@ -479,6 +486,7 @@ fn lower_fn(
             params: &[#(#param_toks),*],
             returns: #returns,
             fallible: #fallible,
+            returns_cast: #returns_cast,
             rust_path: #rust_path,
         }
     }))
@@ -769,4 +777,25 @@ fn returns_self(output: &ReturnType) -> bool {
 fn returns_self_bare(output: &ReturnType) -> bool {
     matches!(output, ReturnType::Type(_, t)
         if matches!(&**t, Type::Path(p) if p.path.is_ident("Self")))
+}
+
+/// The Rust integer type to cast back to, when several Rust widths share one
+/// boundary type.
+///
+/// `usize`, `u64` and `isize` all cross as `i64` -- that is what Python and
+/// JavaScript have -- but the core still wants its own width, so the call site
+/// casts. `None` when the Rust type already is the boundary type, which is the
+/// common case and emits nothing.
+fn int_cast(t: &Type) -> Option<String> {
+    let t = match t {
+        Type::Reference(r) => &*r.elem,
+        other => other,
+    };
+    let Type::Path(p) = t else { return None };
+    let name = p.path.segments.last()?.ident.to_string();
+    match name.as_str() {
+        "i64" | "i32" | "bool" | "f64" | "String" | "str" => None,
+        "u64" | "usize" | "isize" | "u32" | "i16" | "u16" | "i8" | "f32" => Some(name),
+        _ => None,
+    }
 }

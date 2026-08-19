@@ -238,9 +238,11 @@ pub(crate) mod tests_support {
             name: "name",
             ty: Type::Str,
             borrowed: true,
+            cast: None,
         }],
         returns: Type::Str,
         fallible: false,
+        returns_cast: None,
         rust_path: "Hello::greet",
     };
 
@@ -252,6 +254,7 @@ pub(crate) mod tests_support {
         params: &[],
         returns: Type::Unit,
         fallible: true,
+        returns_cast: None,
         rust_path: "Hello::checked",
     };
 
@@ -273,6 +276,7 @@ pub(crate) mod tests_support {
         params: &[],
         returns: Type::Unit,
         fallible: false,
+        returns_cast: None,
         rust_path: "Counter::new",
     };
 
@@ -285,9 +289,11 @@ pub(crate) mod tests_support {
             name: "start",
             ty: Type::I64,
             borrowed: false,
+            cast: None,
         }],
         returns: Type::Unit,
         fallible: true,
+        returns_cast: None,
         rust_path: "Counter::starting_at",
     };
 
@@ -300,9 +306,11 @@ pub(crate) mod tests_support {
             name: "n",
             ty: Type::I64,
             borrowed: false,
+            cast: None,
         }],
         returns: Type::Unit,
         fallible: false,
+        returns_cast: None,
         rust_path: "Counter::add",
     };
 
@@ -317,9 +325,11 @@ pub(crate) mod tests_support {
             name: "total",
             ty: Type::I64,
             borrowed: false,
+            cast: None,
         }],
         returns: Type::Unit,
         fallible: false,
+        returns_cast: None,
         rust_path: "Counter::with_total",
     };
 
@@ -352,9 +362,11 @@ mod tests {
             name: "name",
             ty: Type::Str,
             borrowed: true,
+            cast: None,
         }],
         returns: Type::Str,
         fallible: false,
+        returns_cast: None,
         rust_path: "Hello::greet",
     };
 
@@ -366,6 +378,7 @@ mod tests {
         params: &[],
         returns: Type::Unit,
         fallible: true,
+        returns_cast: None,
         rust_path: "Hello::checked",
     };
 

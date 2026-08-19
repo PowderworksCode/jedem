@@ -82,6 +82,9 @@ pub struct Op {
     /// signature rather than declared: unlike async-ness, the signature
     /// genuinely reveals it.
     pub fallible: bool,
+    /// The cast applied to the returned value, for the same reason as
+    /// [`Param::cast`] -- in the other direction.
+    pub returns_cast: Option<&'static str>,
     /// Path to call, relative to the crate root — `Jawohl::complete_json`.
     pub rust_path: &'static str,
 }
@@ -98,6 +101,14 @@ pub struct Param {
     /// owned `String` that the call site must re-borrow. Without this the
     /// second backend generates code that does not compile.
     pub borrowed: bool,
+    /// The Rust integer type to cast back to, when it is not the one [`Type`]
+    /// carries.
+    ///
+    /// Several Rust widths share one boundary type -- `usize`, `u64` and
+    /// `isize` all cross as [`Type::I64`], because that is what the target
+    /// languages have. The core still wants its own width back, so the call
+    /// site casts. `None` when the Rust type is already the boundary type.
+    pub cast: Option<&'static str>,
 }
 
 /// A C-like enum crossing the boundary.

@@ -195,6 +195,15 @@ impl Counter {
         self.get().steps()
     }
 
+    /// A width that is not the boundary width.
+    ///
+    /// `usize` crosses as `i64`, because that is what Python and JavaScript
+    /// have, and is cast back at the call site -- in both directions. Nothing
+    /// about this signature had to change to say so.
+    fn take_steps(&mut self, n: i64) -> i64 {
+        (self.get_mut().take_steps(n as usize)) as i64
+    }
+
     /// Halve the total, refusing an odd one.
     fn halve(&mut self) -> PyResult<i64> {
         self.get_mut().halve().map_err(err)
