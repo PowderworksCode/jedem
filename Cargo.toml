@@ -11,10 +11,3 @@ repository = "https://github.com/PowderworksCode/jedem"
 [workspace.dependencies]
 jedem = { path = "crates/jedem", version = "0.1.0" }
 jedem-macros = { path = "crates/jedem-macros", version = "0.1.0" }
-
-[workspace.metadata.cratebank]
-# Opted in: this repository is public, so its crate names are already
-# public. Without this the census records the build and withholds the
-# names, which for an open repository is precision nobody asked for.
-public = true
-repository = "https://github.com/PowderworksCode/jedem"
