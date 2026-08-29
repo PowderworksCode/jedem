@@ -88,7 +88,7 @@ except ValueError as e:
     failures += check("odd raises", str(e), "9 is odd")
 try:
     hello.halve_parsed("banana")
-    print("  FAIL unparseable should raise"); failures += 1
+    print("  FAIL unparsable should raise"); failures += 1
 except ValueError as e:
     failures += check("parse error raises", "invalid digit" in str(e), True)
 
