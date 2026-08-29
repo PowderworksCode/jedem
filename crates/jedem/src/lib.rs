@@ -64,7 +64,7 @@
 //! `String`/`&str`, `Vec<u8>`, `Option<T>`, `Vec<T>`, and any C-like enum
 //! deriving [`Enum`]; synchronous; fallible or not — with any error type that
 //! implements `Display`, including `Box<dyn Error>`. Callbacks, handles to stateful objects, and streams are designed but
-//! not in v1 — see `DESIGN.md`.
+//! not in v1 — see `notes/DESIGN.md`.
 //!
 //! A type jedem cannot lower is a **compile error at the macro**, never an
 //! opaque blob smuggled across as a string.
