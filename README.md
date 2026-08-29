@@ -26,6 +26,16 @@ drive it: **pidgin** (~157 hand-written binding symbols that are almost entirely
 generatable) and **jawohl 2.0** (a streaming parser that must feel native in
 Python, TypeScript and .NET).
 
+## Development
+
+`scripts/dev.sh` points git at the committed hooks, builds and tests the
+workspace, installs the `cargo jedem` subcommand the demos are driven through,
+and runs each round trip whose runtime is installed on this machine.
+
+```sh
+scripts/dev.sh
+```
+
 ## The design
 
 One doc: **[DESIGN.md](./DESIGN.md)** — what jedem is and why, the model, the
