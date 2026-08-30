@@ -28,7 +28,7 @@ Python, TypeScript and .NET).
 
 ## The design
 
-One doc: **[DESIGN.md](./DESIGN.md)** — what jedem is and why, the model, the
+One doc: **[notes/DESIGN.md](./notes/DESIGN.md)** — what jedem is and why, the model, the
 type system, ops, the three hard problems, backends, v1 and the roadmap.
 Confidence is marked inline: **[verified]** for claims run or read directly,
 **[speculation]** for unproven reasoning.
